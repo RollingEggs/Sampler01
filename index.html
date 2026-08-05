@@ -28,12 +28,10 @@
     color-scheme: dark;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+  html{ background:var(--chassis); }
   html,body{
-    margin:0; height:100%;
-    background:
-      radial-gradient(ellipse at 20% -10%, #2a2117 0%, transparent 55%),
-      radial-gradient(ellipse at 100% 110%, #1c1712 0%, transparent 50%),
-      var(--chassis);
+    margin:0; height:100%; overflow:hidden;
+    background-color:transparent;
     color:var(--ink);
     font-family:var(--sans);
     overscroll-behavior:none;
@@ -56,6 +54,16 @@
     color:var(--ink-dim); display:flex; align-items:center; gap:7px;
   }
   header .logo span{color:var(--amber);}
+  /* ページごとの背景(最背面。ページ切替でクロスフェードする) */
+  #bg{
+    position:fixed; inset:0; z-index:-1; pointer-events:none;
+    transition:background .28s ease-out;
+  }
+  header .logo .pagechip{
+    font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.06em;
+    color:var(--chassis); background:linear-gradient(180deg,#ffb066,var(--amber));
+    border-radius:7px; padding:2px 7px; margin-left:2px;
+  }
   .dot{
     width:6px; height:6px; border-radius:50%; background:#3a2e1c; flex:none;
   }
@@ -120,8 +128,15 @@
 
   /* ---------- Pad grid ---------- */
   .stage{ flex:1; display:flex; min-height:0; }
+  /* ページ切替のスライドを切り取る窓。負のマージン+同じ量のパディングで
+     パッドの影やグローが切れない余白(14px)を確保している */
+  .pageview{
+    flex:1; display:flex; min-height:0; overflow:hidden;
+    margin:-14px; padding:14px;
+  }
   #grid{
     flex:1; display:grid; gap:9px; min-height:0;
+    will-change:transform;
   }
   .pad{
     /* パッドごとの色。JS が style で流し込む(--pc:原色 / lite・mid:白寄せ) */
@@ -235,6 +250,14 @@
   .swatch.on{ box-shadow:0 0 0 2px var(--ink); }
   .chip.danger{ color:var(--danger); border-color:#5a2b2b; }
 
+  /* ---------- 背景プリセット(⚙パネル内・表示中ページに適用) ---------- */
+  #bgRow{ display:flex; gap:4px; flex:1; }
+  .bgsw{
+    flex:1; height:26px; min-width:0; padding:0;
+    border:1px solid #332c22; border-radius:7px;
+  }
+  .bgsw.on{ box-shadow:0 0 0 2px var(--ink); }
+
   /* ---------- ページ切替バー(最下部): 面全体を左右スワイプ ---------- */
   #pagebar{
     display:flex; align-items:stretch; gap:5px;
@@ -271,8 +294,10 @@
 </head>
 <body>
 
+<div id="bg"></div>
+
 <header>
-  <div class="logo"><span class="dot" id="audioDot"></span>PAD<span>FEED</span></div>
+  <div class="logo"><span class="dot" id="audioDot"></span>PAD<span>FEED</span><span class="pagechip" id="pageChip">P1</span></div>
   <div class="hdr-actions">
     <button class="chip" id="assignBtn" aria-pressed="false">✎ 割当</button>
     <button class="chip" id="fileBtn">📂 ファイル</button>
@@ -305,6 +330,10 @@
     <input type="range" id="vol" min="0" max="1" step="0.01" value="0.9">
     <button class="btn" id="clearBtn">🗑 ページ消去</button>
   </div>
+  <div class="row">
+    <div class="label">BG</div>
+    <div id="bgRow"></div>
+  </div>
 </div>
 
 <div id="padbar" hidden>
@@ -317,7 +346,7 @@
   <div class="swrow" id="swFlat"></div>
 </div>
 
-<div class="stage"><div id="grid"></div></div>
+<div class="stage"><div class="pageview"><div id="grid"></div></div></div>
 
 <div id="pagebar">
   <button class="pgarrow" id="prevPage" aria-label="前のページ">‹</button>
@@ -396,10 +425,27 @@
   function defaultColor(i){ return HUES[i % HUES.length]; }
   function colorOf(i){ return padColors[i] || defaultColor(i); }
 
+  // ページごとの背景プリセット(0 = 既定のチャコール、以降は色相ごとの暗い背景)
+  function shade(hex, t){   // t=1 で真っ黒寄り
+    const n = parseInt(hex.slice(1), 16);
+    const m = v => Math.round(v * (1 - t) + 10 * t);
+    return `rgb(${m((n>>16)&255)},${m((n>>8)&255)},${m(n&255)})`;
+  }
+  const BACKGROUNDS = [
+    'radial-gradient(ellipse at 20% -10%, #2a2117 0%, transparent 55%),' +
+    'radial-gradient(ellipse at 100% 110%, #1c1712 0%, transparent 50%), #17140f'
+  ].concat(
+    ['#ff5c5c','#ff9f1c','#ffe14d','#7bd94f','#33d6c0','#35c1e8','#5aa9ff','#b07cff','#ff6fb5']
+      .map(h =>
+        `radial-gradient(ellipse at 22% -12%, ${shade(h,0.72)} 0%, transparent 58%),` +
+        `radial-gradient(ellipse at 100% 112%, ${shade(h,0.86)} 0%, transparent 52%), #12100d`)
+  );
+
   function makePage(){
     return {
       pads:   Array.from({length: padCount}, () => ({ name:null, buffer:null })),
-      colors: Array.from({length: padCount}, (_, i) => defaultColor(i))
+      colors: Array.from({length: padCount}, (_, i) => defaultColor(i)),
+      bg: 0
     };
   }
   // 全ページを padCount に合わせる(音と色は残す)
@@ -408,6 +454,7 @@
     pages.forEach(pg => {
       while(pg.pads.length   < padCount) pg.pads.push({ name:null, buffer:null });
       while(pg.colors.length < padCount) pg.colors.push(defaultColor(pg.colors.length));
+      if(typeof pg.bg !== 'number' || !BACKGROUNDS[pg.bg]) pg.bg = 0;
     });
   }
   function usePage(p){
@@ -722,6 +769,22 @@
   const pagedotsEl = document.getElementById('pagedots');
   const pageLabelEl = document.getElementById('pagelabel');
   const pageSwipeEl = document.getElementById('pageswipe');
+  const pageChipEl = document.getElementById('pageChip');
+
+  // 背景プリセット(表示中のページに適用)
+  const bgRowEl = document.getElementById('bgRow');
+  BACKGROUNDS.forEach((css, i) => {
+    const b = document.createElement('button');
+    b.className = 'bgsw';
+    b.style.background = css;
+    b.setAttribute('aria-label', `背景 ${i+1}`);
+    b.addEventListener('click', () => {
+      pages[page].bg = i;
+      applyBackground();
+      saveSettings();
+    });
+    bgRowEl.appendChild(b);
+  });
   for(let p = 0; p < PAGE_COUNT; p++){
     const d = document.createElement('div');
     d.className = 'pgdot';
@@ -775,17 +838,41 @@
     pageLabelEl.style.transform = '';
   });
 
-  function goToPage(p){
+  // raw は循環前のページ番号。差の符号がそのままスライド方向になる。
+  function goToPage(raw){
+    const dir = raw === page ? 0 : (raw > page ? 1 : -1);
     stopAllVoices();          // ページが変わるとパッドの中身も変わるので鳴らしっぱなしを防ぐ
     selectedIndex = null;
-    usePage(p);
+    usePage(raw);
     renderGrid();
     renderPageBar();
+    applyBackground();
+    slideGrid(dir);
     saveSettings();
+  }
+
+  // 新しいページを進行方向から滑り込ませる
+  function slideGrid(dir){
+    if(!dir) return;
+    gridEl.style.transition = 'none';
+    gridEl.style.opacity = '0.3';
+    gridEl.style.transform = `translateX(${dir * 100}%)`;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      gridEl.style.transition = 'transform .24s cubic-bezier(.2,.7,.3,1), opacity .24s ease-out';
+      gridEl.style.transform = 'translateX(0)';
+      gridEl.style.opacity = '1';
+    }));
+  }
+
+  const bgEl = document.getElementById('bg');
+  function applyBackground(){
+    bgEl.style.background = BACKGROUNDS[pages[page].bg] || BACKGROUNDS[0];
+    [...bgRowEl.children].forEach((b, i) => b.classList.toggle('on', i === pages[page].bg));
   }
 
   function renderPageBar(){
     pageLabelEl.innerHTML = `PAGE <span>${page+1}</span> / ${PAGE_COUNT}`;
+    pageChipEl.textContent = `P${page+1}`;
     [...pagedotsEl.children].forEach((b, p) => {
       b.classList.toggle('on', p === page);
       b.classList.toggle('has', p !== page && pageHasSound(p));
@@ -850,7 +937,8 @@
     try{
       localStorage.setItem('padfeed_settings', JSON.stringify({
         padCount, playMode, panelOpen, page,
-        pageColors: pages.map(pg => pg.colors)
+        pageColors: pages.map(pg => pg.colors),
+        pageBg:     pages.map(pg => pg.bg)
       }));
     }catch(e){}
   }
@@ -869,6 +957,7 @@
       } else if(isColorArray(s.padColors)){
         pages = [{ pads:[], colors: s.padColors.slice() }];   // 旧形式(単一ページ)からの移行
       }
+      if(Array.isArray(s.pageBg)) s.pageBg.forEach((v, i) => { if(pages[i]) pages[i].bg = v; });
       if(typeof s.page === 'number') page = s.page;
     }catch(e){}
   }
@@ -887,6 +976,7 @@
   usePage(page);
   renderGrid();
   renderPageBar();
+  applyBackground();
 
   document.body.addEventListener('pointerdown', ensureCtx, {once:false});
 
