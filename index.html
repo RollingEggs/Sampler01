@@ -225,28 +225,38 @@
   .swatch.on{ box-shadow:0 0 0 2px var(--ink); }
   .chip.danger{ color:var(--danger); border-color:#5a2b2b; }
 
-  /* ---------- ページ切替バー(最下部) ---------- */
+  /* ---------- ページ切替バー(最下部): 面全体を左右スワイプ ---------- */
   #pagebar{
-    display:flex; align-items:center; gap:4px;
-    padding:0 2px;
+    display:flex; align-items:stretch; gap:5px;
+    height:46px; flex:none;
   }
   .pgarrow{
     border:1px solid #332c22; background:#171310; color:var(--ink-dim);
-    font-family:var(--mono); font-size:16px; font-weight:700; line-height:1;
-    width:34px; height:26px; border-radius:8px; flex:none;
+    font-family:var(--mono); font-size:22px; font-weight:700; line-height:1;
+    width:58px; flex:none; border-radius:11px;
   }
-  .pgarrow:active{ filter:brightness(0.85); }
-  #pagedots{ display:flex; flex:1; gap:2px; }
+  .pgarrow:active{ filter:brightness(0.8); }
+  #pageswipe{
+    flex:1; min-width:0; position:relative; overflow:hidden;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px;
+    background:linear-gradient(180deg,var(--panel),var(--chassis-2));
+    border:1px solid #362d21; border-radius:11px;
+    touch-action:none;
+  }
+  #pageswipe.drag{ border-color:var(--amber-dim); }
+  #pagelabel{
+    font-family:var(--mono); font-size:13px; font-weight:700; letter-spacing:.1em;
+    color:var(--ink); white-space:nowrap;
+    transition:transform .12s ease-out;
+  }
+  #pagelabel span{ color:var(--amber); }
+  #pagedots{ display:flex; gap:5px; pointer-events:none; }
   .pgdot{
-    flex:1; height:26px; min-width:0; padding:0;
-    border:1px solid transparent; background:transparent; border-radius:8px;
-    font-family:var(--mono); font-size:11px; font-weight:600; color:var(--ink-faint);
+    width:6px; height:6px; border-radius:50%; padding:0; border:0;
+    background:#3a3227;
   }
-  .pgdot.has{ color:var(--ink-dim); border-color:#332c22; }
-  .pgdot.on{
-    color:var(--chassis); background:linear-gradient(180deg,#ffb066,var(--amber));
-    border-color:var(--amber);
-  }
+  .pgdot.has{ background:var(--ink-faint); }
+  .pgdot.on{ background:var(--amber); box-shadow:0 0 7px var(--amber); }
 </style>
 </head>
 <body>
@@ -301,7 +311,10 @@
 
 <div id="pagebar">
   <button class="pgarrow" id="prevPage" aria-label="前のページ">‹</button>
-  <div id="pagedots"></div>
+  <div id="pageswipe" aria-label="左右にスワイプでページ切替">
+    <div id="pagelabel">PAGE <span>1</span></div>
+    <div id="pagedots"></div>
+  </div>
   <button class="pgarrow" id="nextPage" aria-label="次のページ">›</button>
 </div>
 
@@ -682,17 +695,62 @@
   }
 
   // ---------------- ページ切替(最下部のバー) ----------------
+  // 演奏中でも狙わずに操作できるよう、バー全体を左右スワイプ + 大きな矢印にしている
   const pagedotsEl = document.getElementById('pagedots');
+  const pageLabelEl = document.getElementById('pagelabel');
+  const pageSwipeEl = document.getElementById('pageswipe');
   for(let p = 0; p < PAGE_COUNT; p++){
-    const b = document.createElement('button');
-    b.className = 'pgdot';
-    b.textContent = String(p+1);
-    b.setAttribute('aria-label', `ページ ${p+1}`);
-    b.addEventListener('click', () => goToPage(p));
-    pagedotsEl.appendChild(b);
+    const d = document.createElement('div');
+    d.className = 'pgdot';
+    pagedotsEl.appendChild(d);
   }
   document.getElementById('prevPage').addEventListener('click', () => goToPage(page - 1));
   document.getElementById('nextPage').addEventListener('click', () => goToPage(page + 1));
+
+  // スワイプ: STEP px 動くごとに1ページ送る(長く払えば連続で送れる)
+  const SWIPE_STEP = 46;
+  let swipeId = null, swipeOrigin = 0, swipeMoved = false;
+
+  pageSwipeEl.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    ensureCtx();
+    swipeId = e.pointerId;
+    swipeOrigin = e.clientX;
+    swipeMoved = false;
+    pageSwipeEl.classList.add('drag');
+    try{ pageSwipeEl.setPointerCapture(e.pointerId); }catch(err){}
+  }, {passive:false});
+
+  pageSwipeEl.addEventListener('pointermove', (e) => {
+    if(e.pointerId !== swipeId) return;
+    e.preventDefault();
+    const dx = e.clientX - swipeOrigin;
+    if(Math.abs(dx) >= SWIPE_STEP){
+      const steps = Math.trunc(dx / SWIPE_STEP);
+      swipeOrigin += steps * SWIPE_STEP;
+      swipeMoved = true;
+      goToPage(page - steps);            // 左へ払う → 次のページ
+      pageLabelEl.style.transform = '';
+    } else {
+      pageLabelEl.style.transform = `translateX(${dx * 0.35}px)`;
+    }
+  }, {passive:false});
+
+  const endSwipe = (e) => {
+    if(e.pointerId !== swipeId) return;
+    swipeId = null;
+    pageSwipeEl.classList.remove('drag');
+    pageLabelEl.style.transform = '';
+    // ほとんど動かさずに離したときはタップ扱いで次のページへ
+    if(!swipeMoved && Math.abs(e.clientX - swipeOrigin) < 8) goToPage(page + 1);
+  };
+  pageSwipeEl.addEventListener('pointerup', endSwipe);
+  pageSwipeEl.addEventListener('pointercancel', (e) => {
+    if(e.pointerId !== swipeId) return;
+    swipeId = null;
+    pageSwipeEl.classList.remove('drag');
+    pageLabelEl.style.transform = '';
+  });
 
   function goToPage(p){
     stopAllVoices();          // ページが変わるとパッドの中身も変わるので鳴らしっぱなしを防ぐ
@@ -704,6 +762,7 @@
   }
 
   function renderPageBar(){
+    pageLabelEl.innerHTML = `PAGE <span>${page+1}</span> / ${PAGE_COUNT}`;
     [...pagedotsEl.children].forEach((b, p) => {
       b.classList.toggle('on', p === page);
       b.classList.toggle('has', p !== page && pageHasSound(p));
