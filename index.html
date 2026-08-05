@@ -124,6 +124,10 @@
     flex:1; display:grid; gap:9px; min-height:0;
   }
   .pad{
+    /* --pc / --pc-a* はパッドごとの色。JS が style で流し込む */
+    --pc: var(--amber);
+    --pc-a20: rgba(255,138,52,0.20);
+    --pc-a45: rgba(255,138,52,0.45);
     position:relative;
     background:linear-gradient(160deg,#332b22,var(--pad) 55%,#211c17);
     border:1px solid var(--pad-border);
@@ -138,6 +142,12 @@
   .pad::before{
     content:''; position:absolute; inset:0; border-radius:12px;
     background:radial-gradient(circle at 30% 20%, rgba(255,255,255,0.06), transparent 55%);
+  }
+  .pad.assigned{
+    background:
+      linear-gradient(160deg, var(--pc-a20), transparent 62%),
+      linear-gradient(160deg,#332b22,var(--pad) 55%,#211c17);
+    border-color:var(--pc-a45);
   }
   .pad.empty{
     border-style:dashed; border-color:var(--pad-empty-border);
@@ -158,18 +168,18 @@
     position:absolute; top:8px; right:9px; width:8px; height:8px; border-radius:50%;
     background:#3a2e1c; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.4);
   }
-  .pad.assigned .led{ background:var(--amber-dim); }
+  .pad.assigned .led{ background:var(--pc-a45); }
   .pad.playing{
     transform:scale(0.96);
-    border-color:var(--amber);
-    box-shadow: 0 0 0 2px rgba(255,138,52,0.35), 0 0 22px rgba(255,138,52,0.45), inset 0 1px 0 rgba(255,255,255,0.08);
+    border-color:var(--pc);
+    box-shadow: 0 0 0 2px var(--pc-a45), 0 0 22px var(--pc-a45), inset 0 1px 0 rgba(255,255,255,0.08);
   }
-  .pad.playing .led{ background:var(--amber); box-shadow:0 0 8px var(--amber); }
-  .pad.cutmode.playing{
-    border-color:var(--teal);
-    box-shadow: 0 0 0 2px rgba(51,214,192,0.35), 0 0 22px rgba(51,214,192,0.45);
+  .pad.playing .led{ background:var(--pc); box-shadow:0 0 8px var(--pc); }
+  /* 読み込めなかったときの短い赤フラッシュ */
+  .pad.loaderr{
+    border-color:var(--danger) !important;
+    box-shadow: 0 0 0 2px rgba(255,92,92,0.5), 0 0 18px rgba(255,92,92,0.4);
   }
-  .pad.cutmode.playing .led{ background:var(--teal); box-shadow:0 0 8px var(--teal); }
   /* 割当モード中は「タップ待ち」であることを示す */
   body.assign .pad{ border-color:var(--teal-dim); }
   body.assign .pad .padempty-icon{ color:var(--teal); }
@@ -188,20 +198,25 @@
   /* file input hidden */
   input[type=file]{ display:none; }
 
-  /* ---------- Toast ---------- */
-  #toast{
-    position:fixed; left:50%; transform:translateX(-50%) translateY(12px);
-    bottom: max(16px, env(safe-area-inset-bottom));
-    max-width:min(92vw, 420px);
-    background:#1c1712; border:1px solid #4a3c28; border-radius:11px;
-    color:var(--ink); font-family:var(--mono); font-size:11px; line-height:1.5;
-    padding:10px 14px; text-align:center;
-    box-shadow:0 8px 24px rgba(0,0,0,0.5);
-    opacity:0; pointer-events:none; transition:opacity .18s, transform .18s;
-    z-index:50;
+  /* ---------- 選択中パッドの操作バー ---------- */
+  #padbar{
+    display:flex; align-items:center; gap:7px;
+    background:linear-gradient(180deg,var(--panel),var(--chassis-2));
+    border:1px solid #362d21; border-radius:var(--radius);
+    padding:6px 8px;
   }
-  #toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
-  #toast.err{ border-color:var(--danger); color:#ffd9d9; }
+  #padbar[hidden]{ display:none; }
+  #padbar .pblabel{
+    font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:.08em;
+    color:var(--teal); white-space:nowrap;
+  }
+  #swatches{ display:flex; gap:5px; flex:1; justify-content:space-between; }
+  .swatch{
+    width:26px; height:26px; border-radius:50%; padding:0;
+    border:2px solid #171310; box-shadow:0 0 0 1px #332c22;
+  }
+  .swatch.on{ box-shadow:0 0 0 2px var(--ink); }
+  .chip.danger{ color:var(--danger); border-color:#5a2b2b; }
 </style>
 </head>
 <body>
@@ -242,9 +257,13 @@
   </div>
 </div>
 
-<div class="stage"><div id="grid"></div></div>
+<div id="padbar" hidden>
+  <div class="pblabel" id="padbarLabel">PAD 01</div>
+  <div id="swatches"></div>
+  <button class="chip danger" id="deleteBtn" aria-label="このパッドの音を削除">🗑</button>
+</div>
 
-<div id="toast" role="status" aria-live="polite"></div>
+<div class="stage"><div id="grid"></div></div>
 
 <!-- accept は付けない。iOS Safari では accept="audio/*" を指定すると
      ファイルAppの「ダウンロード」内の mp3/wav が選択不可(グレーアウト)になるため。
@@ -267,6 +286,18 @@
 
   // pads[i] = { name, buffer }
   let pads = [];
+  // パッドごとの色(音源と違い localStorage に保存される)
+  const PALETTE = ['#ff8a34','#ffd23f','#7bd94f','#33d6c0','#5aa9ff','#b07cff','#ff6fb5','#ff5c5c'];
+  let padColors = [];
+
+  function hexToRgba(hex, a){
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+  }
+  function colorOf(i){ return padColors[i] || PALETTE[0]; }
+  function ensurePadColors(){
+    while(padColors.length < padCount) padColors.push(PALETTE[0]);
+  }
 
   // ---------------- Audio engine ----------------
   let ctx = null;
@@ -359,6 +390,7 @@
       pads.push(old[i] || { name:null, buffer:null });
     }
     padCount = newCount;
+    ensurePadColors();
     if(selectedIndex !== null && selectedIndex >= newCount) selectedIndex = null;
     renderGrid();
   }
@@ -375,6 +407,10 @@
         + (playMode.startsWith('cut') ? ' cutmode' : '')
         + (i === selectedIndex ? ' selected' : '');
       el.dataset.idx = i;
+      const c = colorOf(i);
+      el.style.setProperty('--pc', c);
+      el.style.setProperty('--pc-a20', hexToRgba(c, 0.20));
+      el.style.setProperty('--pc-a45', hexToRgba(c, 0.45));
       const tag = i === selectedIndex ? `<div class="padtag">選択中</div>` : '';
       el.innerHTML = p.buffer
         ? `${tag || '<div class="led"></div>'}<div class="padnum">PAD ${String(i+1).padStart(2,'0')}</div><div class="padname">${escapeHtml(p.name)}</div>`
@@ -382,6 +418,7 @@
       attachPadEvents(el, i);
       gridEl.appendChild(el);
     }
+    renderPadBar();
   }
 
   function escapeHtml(s){
@@ -447,9 +484,6 @@
   function selectPad(idx){
     selectedIndex = (selectedIndex === idx) ? null : idx;
     renderGrid();
-    if(selectedIndex !== null){
-      showToast(`PAD ${String(idx+1).padStart(2,'0')} を選択 → 「📂 ファイル」で音源を選ぶと割り当てます。`);
-    }
   }
 
   function clearSelection(){
@@ -462,10 +496,7 @@
     ensureCtx();
     let start = selectedIndex;
     if(start === null) start = pads.findIndex(p => !p.buffer);   // 未選択なら最初の空きパッドから
-    if(start < 0){
-      showToast('割当先のパッドをタップしてから「📂 ファイル」を押してください。', true);
-      return;
-    }
+    if(start < 0) start = 0;                                     // 空きが無ければ先頭から差し替え
     assignStartIndex = start;
     fileInput.value = '';
     fileInput.click();
@@ -478,30 +509,21 @@
     if(!files.length || start === null) return;
     clearSelection();
 
-    let loaded = 0, failed = 0, skipped = 0;
     let slot = start;
-    let firstName = null;
     for(const f of files){
-      if(slot >= pads.length){ skipped++; continue; }
-      if(await assignFileToPad(slot, f)){
-        if(firstName === null) firstName = f.name;
-        loaded++; slot++;
-      } else {
-        failed++;
-      }
+      if(slot >= pads.length) break;
+      if(await assignFileToPad(slot, f)) slot++;
+      else flashError(slot);
     }
-
-    let msg;
-    if(loaded === 1 && !failed && !skipped){
-      msg = `PAD ${String(start+1).padStart(2,'0')} → ${firstName}`;
-    } else {
-      const parts = [`PAD ${String(start+1).padStart(2,'0')} から ${loaded}個を割当。`];
-      if(failed)  parts.push(`${failed}個は非対応の形式。`);
-      if(skipped) parts.push(`${skipped}個はパッド数が足りず未割当。`);
-      msg = parts.join(' ');
-    }
-    showToast(msg, loaded === 0);
   });
+
+  // 読み込めなかったパッドを一瞬だけ赤く光らせる(ポップアップは出さない)
+  function flashError(idx){
+    const el = gridEl.children[idx];
+    if(!el) return;
+    el.classList.add('loaderr');
+    setTimeout(() => { const e2 = gridEl.children[idx]; if(e2) e2.classList.remove('loaderr'); }, 900);
+  }
 
   // 戻り値: 読み込みに成功したら true
   async function assignFileToPad(idx, file){
@@ -521,15 +543,47 @@
     }
   }
 
-  // ---------------- Toast ----------------
-  const toastEl = document.getElementById('toast');
-  let toastTimer = null;
-  function showToast(msg, isError){
-    toastEl.textContent = msg;
-    toastEl.classList.toggle('err', !!isError);
-    toastEl.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 4000);
+  // ---------------- 選択中パッドの操作バー(色の変更 / 削除) ----------------
+  const padbarEl = document.getElementById('padbar');
+  const padbarLabel = document.getElementById('padbarLabel');
+  const swatchesEl = document.getElementById('swatches');
+
+  PALETTE.forEach(c => {
+    const b = document.createElement('button');
+    b.className = 'swatch';
+    b.style.background = c;
+    b.dataset.color = c;
+    b.setAttribute('aria-label', 'パッドの色: ' + c);
+    b.addEventListener('click', () => {
+      if(selectedIndex === null) return;
+      padColors[selectedIndex] = c;
+      saveSettings();
+      renderGrid();
+    });
+    swatchesEl.appendChild(b);
+  });
+
+  function renderPadBar(){
+    if(selectedIndex === null){ padbarEl.hidden = true; return; }
+    padbarEl.hidden = false;
+    padbarLabel.textContent = `PAD ${String(selectedIndex+1).padStart(2,'0')}`;
+    const c = colorOf(selectedIndex);
+    [...swatchesEl.children].forEach(b => b.classList.toggle('on', b.dataset.color === c));
+  }
+
+  // 選択中パッドの音を削除(色と選択状態はそのまま残す)
+  document.getElementById('deleteBtn').addEventListener('click', () => {
+    if(selectedIndex === null) return;
+    stopPadVoices(selectedIndex);
+    pads[selectedIndex] = { name:null, buffer:null };
+    renderGrid();
+  });
+
+  function stopPadVoices(idx){
+    if(cutVoice && cutVoice.padIndex === idx){ stopVoiceSmooth(cutVoice); cutVoice = null; }
+    heldVoices.forEach((v, key) => {
+      if(v.padIndex === idx){ stopVoiceSmooth(v); heldVoices.delete(key); }
+    });
   }
 
   // ---------------- Controls ----------------
@@ -564,7 +618,6 @@
     pads = pads.map(() => ({ name:null, buffer:null }));
     selectedIndex = null;
     renderGrid();
-    showToast('全パッドを消去しました。');
   });
 
   // 割当モード: ONの間はパッドをタップするとファイル選択が開く
@@ -576,10 +629,7 @@
     document.body.classList.toggle('assign', on);
     if(!on) clearSelection();
   }
-  assignBtn.addEventListener('click', () => {
-    setAssignMode(!assignMode);
-    if(assignMode) showToast('割当先のパッドをタップしてください。');
-  });
+  assignBtn.addEventListener('click', () => setAssignMode(!assignMode));
 
   // コントロールパネルの折りたたみ
   const panelEl = document.getElementById('panel');
@@ -595,7 +645,7 @@
   // ---------------- Settings persistence (layout only, not audio) ----------------
   function saveSettings(){
     try{
-      localStorage.setItem('padfeed_settings', JSON.stringify({ padCount, playMode, panelOpen }));
+      localStorage.setItem('padfeed_settings', JSON.stringify({ padCount, playMode, panelOpen, padColors }));
     }catch(e){}
   }
   function loadSettings(){
@@ -606,6 +656,7 @@
       if(s.padCount) padCount = s.padCount;
       if(s.playMode) playMode = s.playMode;
       if(typeof s.panelOpen === 'boolean') panelOpen = s.panelOpen;
+      if(Array.isArray(s.padColors)) padColors = s.padColors.filter(c => typeof c === 'string');
     }catch(e){}
   }
 
@@ -620,6 +671,7 @@
   setAssignMode(false);
 
   for(let i=0;i<padCount;i++) pads.push({ name:null, buffer:null });
+  ensurePadColors();
   renderGrid();
 
   document.body.addEventListener('pointerdown', ensureCtx, {once:false});
