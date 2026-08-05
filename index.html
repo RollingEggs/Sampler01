@@ -124,9 +124,10 @@
     flex:1; display:grid; gap:9px; min-height:0;
   }
   .pad{
-    /* --pc / --pc-a* はパッドごとの色。JS が style で流し込む */
+    /* パッドごとの色。JS が style で流し込む(--pc:原色 / lite・mid:白寄せ) */
     --pc: var(--amber);
-    --pc-a20: rgba(255,138,52,0.20);
+    --pc-lite: #ffd9b8;
+    --pc-mid: #ffab6e;
     --pc-a45: rgba(255,138,52,0.45);
     position:relative;
     background:linear-gradient(160deg,#332b22,var(--pad) 55%,#211c17);
@@ -143,11 +144,17 @@
     content:''; position:absolute; inset:0; border-radius:12px;
     background:radial-gradient(circle at 30% 20%, rgba(255,255,255,0.06), transparent 55%);
   }
+  /* 音が入ったパッドは色そのものが面になる(明るいパッド + 濃い文字) */
   .pad.assigned{
-    background:
-      linear-gradient(160deg, var(--pc-a20), transparent 62%),
-      linear-gradient(160deg,#332b22,var(--pad) 55%,#211c17);
-    border-color:var(--pc-a45);
+    background:linear-gradient(168deg, var(--pc-lite) 0%, var(--pc-mid) 100%);
+    border-color:var(--pc);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.55),
+      inset 0 -8px 12px rgba(0,0,0,0.13),
+      0 3px 0 rgba(0,0,0,0.4);
+  }
+  .pad.assigned::before{
+    background:radial-gradient(circle at 30% 15%, rgba(255,255,255,0.55), transparent 60%);
   }
   .pad.empty{
     border-style:dashed; border-color:var(--pad-empty-border);
@@ -155,26 +162,21 @@
   }
   .pad.empty .padnum{ display:none; }
   .pad .padnum{
-    position:absolute; top:7px; left:9px; font-family:var(--mono); font-size:10px; font-weight:600;
-    color:var(--ink-faint); letter-spacing:.05em;
+    position:absolute; top:6px; left:9px; font-family:var(--mono); font-size:13px; font-weight:700;
+    color:rgba(24,18,10,0.55); letter-spacing:.02em; z-index:1;
   }
   .pad .padname{
-    font-family:var(--mono); font-size:11.5px; font-weight:600; color:var(--ink);
+    font-family:var(--sans); font-size:13px; font-weight:700; color:#1c160e;
     line-height:1.25; word-break:break-word; position:relative; z-index:1;
-    max-height:2.6em; overflow:hidden;
+    max-height:3.8em; overflow:hidden;
   }
   .pad .padempty-icon{ font-size:22px; color:var(--ink-faint); }
-  .pad .led{
-    position:absolute; top:8px; right:9px; width:8px; height:8px; border-radius:50%;
-    background:#3a2e1c; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.4);
-  }
-  .pad.assigned .led{ background:var(--pc-a45); }
   .pad.playing{
-    transform:scale(0.96);
-    border-color:var(--pc);
-    box-shadow: 0 0 0 2px var(--pc-a45), 0 0 22px var(--pc-a45), inset 0 1px 0 rgba(255,255,255,0.08);
+    transform:scale(0.95);
+    border-color:#fff;
+    filter:brightness(1.15) saturate(1.15);
+    box-shadow: 0 0 0 3px var(--pc), 0 0 26px var(--pc-a45);
   }
-  .pad.playing .led{ background:var(--pc); box-shadow:0 0 8px var(--pc); }
   /* 読み込めなかったときの短い赤フラッシュ */
   .pad.loaderr{
     border-color:var(--danger) !important;
@@ -190,9 +192,10 @@
   }
   .pad.selected .padempty-icon{ color:var(--teal); }
   .pad .padtag{
-    position:absolute; top:7px; right:9px;
+    position:absolute; top:6px; right:7px; z-index:1;
     font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:.08em;
-    color:var(--teal);
+    color:#e9fffb; background:rgba(12,30,28,0.72); border:1px solid var(--teal);
+    border-radius:6px; padding:1px 5px;
   }
 
   /* file input hidden */
@@ -215,7 +218,7 @@
     width:26px; height:26px; border-radius:50%; padding:0;
     border:2px solid #171310; box-shadow:0 0 0 1px #332c22;
   }
-  .swatch.on{ box-shadow:0 0 0 2px var(--ink); }
+  .swatch.on{ box-shadow:0 0 0 2px var(--ink); transform:scale(1.08); }
   .chip.danger{ color:var(--danger); border-color:#5a2b2b; }
 </style>
 </head>
@@ -293,6 +296,15 @@
   function hexToRgba(hex, a){
     const n = parseInt(hex.slice(1), 16);
     return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+  }
+  // t=0 で原色、t=1 で白。パッド面のパステル調グラデーションに使う
+  function tint(hex, t){
+    const n = parseInt(hex.slice(1), 16);
+    const m = v => Math.round(v + (255 - v) * t);
+    return `rgb(${m((n>>16)&255)},${m((n>>8)&255)},${m(n&255)})`;
+  }
+  function padFace(hex){
+    return `linear-gradient(168deg, ${tint(hex,0.62)} 0%, ${tint(hex,0.24)} 100%)`;
   }
   function colorOf(i){ return padColors[i] || PALETTE[0]; }
   function ensurePadColors(){
@@ -409,11 +421,12 @@
       el.dataset.idx = i;
       const c = colorOf(i);
       el.style.setProperty('--pc', c);
-      el.style.setProperty('--pc-a20', hexToRgba(c, 0.20));
+      el.style.setProperty('--pc-lite', tint(c, 0.62));
+      el.style.setProperty('--pc-mid', tint(c, 0.24));
       el.style.setProperty('--pc-a45', hexToRgba(c, 0.45));
       const tag = i === selectedIndex ? `<div class="padtag">選択中</div>` : '';
       el.innerHTML = p.buffer
-        ? `${tag || '<div class="led"></div>'}<div class="padnum">PAD ${String(i+1).padStart(2,'0')}</div><div class="padname">${escapeHtml(p.name)}</div>`
+        ? `${tag}<div class="padnum">${i+1}</div><div class="padname">${escapeHtml(p.name)}</div>`
         : `${tag}<div class="padempty-icon">＋</div>`;
       attachPadEvents(el, i);
       gridEl.appendChild(el);
@@ -551,7 +564,7 @@
   PALETTE.forEach(c => {
     const b = document.createElement('button');
     b.className = 'swatch';
-    b.style.background = c;
+    b.style.background = padFace(c);   // パッド面と同じ見え方にする
     b.dataset.color = c;
     b.setAttribute('aria-label', 'パッドの色: ' + c);
     b.addEventListener('click', () => {
