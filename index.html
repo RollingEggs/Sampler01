@@ -28,6 +28,9 @@
     color-scheme: dark;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+  /* iOS Safari は viewport の user-scalable=no を無視するので、
+     ダブルタップでの拡大は touch-action で止める */
+  html,body,header,.panel,#padbar,#pagebar,button{ touch-action:manipulation; }
   html{ background:var(--chassis); }
   html,body{
     margin:0; height:100%; overflow:hidden;
@@ -790,16 +793,16 @@
   document.getElementById('prevPage').addEventListener('click', () => goToPage(page - 1));
   document.getElementById('nextPage').addEventListener('click', () => goToPage(page + 1));
 
-  // スワイプ: STEP px 動くごとに1ページ送る(長く払えば連続で送れる)
+  // スワイプ: 1回のスワイプで必ず1ページだけ動く(どれだけ大きく払っても同じ)
   const SWIPE_STEP = 46;
-  let swipeId = null, swipeOrigin = 0, swipeMoved = false;
+  let swipeId = null, swipeOrigin = 0, swipeDone = false;
 
   pageSwipeEl.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     ensureCtx();
     swipeId = e.pointerId;
     swipeOrigin = e.clientX;
-    swipeMoved = false;
+    swipeDone = false;
     pageSwipeEl.classList.add('drag');
     try{ pageSwipeEl.setPointerCapture(e.pointerId); }catch(err){}
   }, {passive:false});
@@ -807,13 +810,12 @@
   pageSwipeEl.addEventListener('pointermove', (e) => {
     if(e.pointerId !== swipeId) return;
     e.preventDefault();
+    if(swipeDone) return;                // 指を離すまで追加のページ送りはしない
     const dx = e.clientX - swipeOrigin;
     if(Math.abs(dx) >= SWIPE_STEP){
-      const steps = Math.trunc(dx / SWIPE_STEP);
-      swipeOrigin += steps * SWIPE_STEP;
-      swipeMoved = true;
-      goToPage(page - steps);            // 左へ払う → 次のページ
+      swipeDone = true;
       pageLabelEl.style.transform = '';
+      goToPage(page + (dx < 0 ? 1 : -1));  // 左へ払う → 次のページ
     } else {
       pageLabelEl.style.transform = `translateX(${dx * 0.35}px)`;
     }
@@ -825,7 +827,7 @@
     pageSwipeEl.classList.remove('drag');
     pageLabelEl.style.transform = '';
     // ほとんど動かさずに離したときはタップ扱いで次のページへ
-    if(!swipeMoved && Math.abs(e.clientX - swipeOrigin) < 8) goToPage(page + 1);
+    if(!swipeDone && Math.abs(e.clientX - swipeOrigin) < 8) goToPage(page + 1);
   };
   pageSwipeEl.addEventListener('pointerup', endSwipe);
   pageSwipeEl.addEventListener('pointercancel', (e) => {
