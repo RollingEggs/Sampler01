@@ -249,6 +249,8 @@
     color:var(--teal); white-space:nowrap; flex:none;
   }
   #padModeSel{ font-size:11px; padding:6px 22px 6px 8px; flex:2; min-width:0; }
+  #velSeg button{ font-size:11px; padding:5px 2px; }
+  #velLabel.off{ color:var(--danger); }
   .swrow{ display:flex; gap:3px; }
   .swatch{
     flex:1; height:24px; min-width:0; padding:0;
@@ -346,6 +348,10 @@
     <select id="padModeSel" class="styled"></select>
     <button class="chip danger" id="deleteBtn" aria-label="このパッドの音を削除">🗑</button>
   </div>
+  <div class="pbrow">
+    <div class="pblabel" id="velLabel">VEL</div>
+    <div class="segmented" id="velSeg"></div>
+  </div>
   <div class="swrow" id="swGrad"></div>
   <div class="swrow" id="swFlat"></div>
 </div>
@@ -389,6 +395,7 @@
   let pads = [];                // 現在のページの pads(参照)
   let padColors = [];           // 現在のページの colors(参照)
   let padModes = [];            // 現在のページの modes(参照)
+  let padVels = [];             // 現在のページの vels(参照)
 
   // 15色 × (グラデ / 単色) = 30バリエーション
   const HUES = [
@@ -464,11 +471,31 @@
   const DEFAULT_MODE = 'press';
   function modeOf(i){ return (padModes[i] && MODE_TAGS[padModes[i]]) ? padModes[i] : DEFAULT_MODE; }
 
+  // パッドごとのベロシティ感度(タップの強さで音量を変える)
+  const VEL_KINDS = [
+    ['off',  '一定'],
+    ['soft', 'SOFT'],
+    ['mid',  'MID'],
+    ['hard', 'HARD']
+  ];
+  // ref: この強さ(加速度 m/s^2 相当)で最大音量。exp: カーブの立ち上がり。
+  // 感覚は使いながら調整する前提で、ここだけ触れば効き方が変わるようにしてある。
+  const VEL_CURVES = {
+    soft: { ref: 2.5, exp: 0.55 },
+    mid:  { ref: 5.0, exp: 0.85 },
+    hard: { ref: 9.0, exp: 1.15 }
+  };
+  const VEL_MIN = 0.18;          // 弱く叩いてもこれ以下にはしない
+  const VEL_TAGS = { soft:'S', mid:'M', hard:'H' };
+  const DEFAULT_VEL = 'off';
+  function velOf(i){ return VEL_CURVES[padVels[i]] ? padVels[i] : DEFAULT_VEL; }
+
   function makePage(){
     return {
       pads:   Array.from({length: padCount}, () => ({ name:null, buffer:null })),
       colors: Array.from({length: padCount}, (_, i) => defaultColor(i)),
-      modes:  Array.from({length: padCount}, () => DEFAULT_MODE)
+      modes:  Array.from({length: padCount}, () => DEFAULT_MODE),
+      vels:   Array.from({length: padCount}, () => DEFAULT_VEL)
       // bg は ensurePages がページ番号ごとの既定を入れる
     };
   }
@@ -477,9 +504,11 @@
     while(pages.length < PAGE_COUNT) pages.push(makePage());
     pages.forEach((pg, i) => {
       if(!Array.isArray(pg.modes)) pg.modes = [];
+      if(!Array.isArray(pg.vels))  pg.vels  = [];
       while(pg.pads.length   < padCount) pg.pads.push({ name:null, buffer:null });
       while(pg.colors.length < padCount) pg.colors.push(defaultColor(pg.colors.length));
       while(pg.modes.length  < padCount) pg.modes.push(DEFAULT_MODE);
+      while(pg.vels.length   < padCount) pg.vels.push(DEFAULT_VEL);
       // 未設定なら「ページごとに違う背景」を既定にする
       if(typeof pg.bg !== 'number' || !BACKGROUNDS[pg.bg]) pg.bg = i % BACKGROUNDS.length;
     });
@@ -489,6 +518,7 @@
     pads = pages[page].pads;
     padColors = pages[page].colors;
     padModes = pages[page].modes;
+    padVels = pages[page].vels;
   }
   function pageHasSound(p){ return pages[p].pads.some(x => x.buffer); }
 
@@ -511,19 +541,88 @@
     el.title = (ctx && ctx.state === 'running') ? 'AUDIO READY' : 'TAP TO START AUDIO';
   }
 
+  // ---------------- タップの強さ(ベロシティ) ----------------
+  // iPhone は指の圧力を取れないため(3D Touch 廃止)、端末の加速度センサーで
+  // 「叩かれた衝撃」を拾う。圧力が取れる端末では PointerEvent.pressure を使う。
+  const MOTION_WINDOW = 110;     // 押下前どこまで遡って衝撃を探すか(ms)
+  const MOTION_LOOKAHEAD = 70;   // 発音後に衝撃を拾い直して音量を微調整する猶予(ms)
+  let motionState = 'idle';      // idle / on / denied / unsupported
+  const motionLog = [];          // {t, m} 直近の衝撃
+  let gravBase = 9.8;
+
+  function onMotion(e){
+    let m = null;
+    const a = e.acceleration;
+    if(a && (a.x !== null || a.y !== null || a.z !== null)){
+      m = Math.hypot(a.x || 0, a.y || 0, a.z || 0);
+    } else {
+      const g = e.accelerationIncludingGravity;
+      if(!g) return;
+      const mag = Math.hypot(g.x || 0, g.y || 0, g.z || 0);
+      m = Math.abs(mag - gravBase);
+      gravBase += (mag - gravBase) * 0.08;   // 重力ぶんを緩やかに追従して差し引く
+    }
+    motionLog.push({ t: performance.now(), m });
+    if(motionLog.length > 90) motionLog.shift();
+  }
+
+  // 感度を有効にした瞬間(ユーザー操作の中)で許可を求める必要がある
+  async function ensureMotion(){
+    if(motionState === 'on' || motionState === 'denied') return motionState;
+    if(typeof DeviceMotionEvent === 'undefined'){ motionState = 'unsupported'; return motionState; }
+    try{
+      if(typeof DeviceMotionEvent.requestPermission === 'function'){
+        const r = await DeviceMotionEvent.requestPermission();
+        if(r !== 'granted'){ motionState = 'denied'; return motionState; }
+      }
+      window.addEventListener('devicemotion', onMotion);
+      motionState = 'on';
+    }catch(err){
+      motionState = 'denied';
+    }
+    return motionState;
+  }
+
+  function peakBetween(t0, t1){
+    let peak = 0;
+    for(const s of motionLog) if(s.t >= t0 && s.t <= t1 && s.m > peak) peak = s.m;
+    return peak;
+  }
+
+  // 押した瞬間の強さを取っておく(リリース系のモードでも「叩いた強さ」を使う)
+  const pointerVel = new Map();  // pointerId -> {pressure|null, t}
+  function captureStrength(e){
+    const usable = (typeof e.pressure === 'number' && e.pressure > 0 && e.pressure !== 0.5);
+    pointerVel.set(e.pointerId, { pressure: usable ? e.pressure : null, t: performance.now() });
+  }
+
+  function gainFor(kind, strength){
+    const c = VEL_CURVES[kind];
+    if(!c) return 1;
+    const x = Math.min(1, Math.max(0, strength));
+    return VEL_MIN + (1 - VEL_MIN) * Math.pow(x, c.exp);
+  }
+  // 0..1 に正規化した叩きの強さ
+  function strengthFor(kind, info, until){
+    if(!info) return 1;
+    if(info.pressure !== null) return info.pressure;
+    const c = VEL_CURVES[kind];
+    return Math.min(1, peakBetween(info.t - MOTION_WINDOW, until) / c.ref);
+  }
+
   // 鳴っているボイスの集合。{source, gainNode, padIndex, hold, toggle, cut}
   const voices = new Set();
   const holdByPointer = new Map();   // pointerId -> voice (HOLD用)
   const pointerPad = new Map();      // pointerId -> padIndex (押下中のパッド)
 
-  function playBuffer(padIndex, tags){
+  function playBuffer(padIndex, tags, gain){
     const p = pads[padIndex];
     if(!p || !p.buffer) return null;
     ensureCtx();
     const src = ctx.createBufferSource();
     src.buffer = p.buffer;
     const g = ctx.createGain();
-    g.gain.value = 1;
+    g.gain.value = (typeof gain === 'number') ? gain : 1;
     src.connect(g);
     g.connect(master);
     const v = Object.assign({ source:src, gainNode:g, padIndex, stopping:false }, tags || {});
@@ -566,9 +665,28 @@
   }
 
   // 発音開始。MONO(単体)ならこの時点で他の音を全部止める
-  function startVoice(idx, tags){
+  function startVoice(idx, tags, pointerId){
     if(voiceMode === 'mono') stopAllVoices();
-    return playBuffer(idx, tags);
+    const kind = velOf(idx);
+    if(kind === 'off') return playBuffer(idx, tags);
+
+    const info = pointerVel.get(pointerId);
+    const now = performance.now();
+    const v = playBuffer(idx, tags, gainFor(kind, strengthFor(kind, info, now)));
+    // 衝撃のピークは発音直後に届くこともあるので、少しあとで拾い直して音量を補正する
+    if(v && info && info.pressure === null){
+      setTimeout(() => {
+        if(v.stopping) return;
+        const target = gainFor(kind, strengthFor(kind, info, performance.now()));
+        try{
+          const t = ctx.currentTime;
+          v.gainNode.gain.cancelScheduledValues(t);
+          v.gainNode.gain.setValueAtTime(v.gainNode.gain.value, t);
+          v.gainNode.gain.linearRampToValueAtTime(target, t + 0.02);
+        }catch(err){}
+      }, MOTION_LOOKAHEAD);
+    }
+    return v;
   }
 
   // パッドごとのモードに沿って、押した/離した瞬間の動作を決める
@@ -576,11 +694,11 @@
     const m = modeOf(idx);
     const onPress = phase === 'press';
     switch(m){
-      case 'press':   if(onPress) startVoice(idx, {}); break;
-      case 'release': if(!onPress) startVoice(idx, {}); break;
+      case 'press':   if(onPress) startVoice(idx, {}, pointerId); break;
+      case 'release': if(!onPress) startVoice(idx, {}, pointerId); break;
       case 'hold':
         if(onPress){
-          const v = startVoice(idx, { hold:true });
+          const v = startVoice(idx, { hold:true }, pointerId);
           if(v) holdByPointer.set(pointerId, v);
         } else {
           const v = holdByPointer.get(pointerId);
@@ -592,21 +710,21 @@
       case 'togglerelease':
         if(onPress !== (m === 'togglepress')) break;
         if(padSounding(idx)) stopPadVoices(idx);
-        else startVoice(idx, { toggle:true });
+        else startVoice(idx, { toggle:true }, pointerId);
         break;
       // カットイン: 他のカットイン音だけを止めて差し替える
       case 'cutpress':
       case 'cutrelease':
         if(onPress !== (m === 'cutpress')) break;
         [...voices].filter(v => v.cut).forEach(stopVoice);
-        startVoice(idx, { cut:true });
+        startVoice(idx, { cut:true }, pointerId);
         break;
       // 全カットイン: 鳴っている音をすべて止めて差し替える
       case 'cutallpress':
       case 'cutallrelease':
         if(onPress !== (m === 'cutallpress')) break;
         stopAllVoices();
-        startVoice(idx, {});
+        startVoice(idx, {}, pointerId);
         break;
     }
   }
@@ -656,7 +774,7 @@
       el.style.setProperty('--pc-a45', hexToRgba(hex, 0.45));
       const tag = i === selectedIndex
         ? `<div class="padtag">選択中</div>`
-        : (p.buffer ? `<div class="modetag">${MODE_TAGS[modeOf(i)]}</div>` : '');
+        : (p.buffer ? `<div class="modetag">${MODE_TAGS[modeOf(i)]}${velOf(i) === 'off' ? '' : '·' + VEL_TAGS[velOf(i)]}</div>` : '');
       el.innerHTML = p.buffer
         ? `${tag}<div class="padnum">${i+1}</div><div class="padname">${escapeHtml(p.name)}</div>`
         : `${tag}<div class="padempty-icon">＋</div>`;
@@ -683,6 +801,7 @@
       }
       if(!p.buffer) return;
       pointerPad.set(e.pointerId, idx);
+      captureStrength(e);
       trigger(idx, 'press', e.pointerId);
     }, {passive:false});
 
@@ -691,8 +810,9 @@
       if(idx2 === undefined) return;
       pointerPad.delete(e.pointerId);
       const p = pads[idx2];
-      if(!p || !p.buffer) return;
+      if(!p || !p.buffer){ pointerVel.delete(e.pointerId); return; }
       trigger(idx2, 'release', e.pointerId);
+      setTimeout(() => pointerVel.delete(e.pointerId), MOTION_LOOKAHEAD + 60);
     };
     el.addEventListener('pointerup', release, {passive:false});
     el.addEventListener('pointercancel', release, {passive:false});
@@ -807,11 +927,36 @@
     renderGrid();
   });
 
+  // ベロシティ感度
+  const velSeg = document.getElementById('velSeg');
+  const velLabel = document.getElementById('velLabel');
+  VEL_KINDS.forEach(([value, label]) => {
+    const b = document.createElement('button');
+    b.dataset.v = value; b.textContent = label;
+    b.addEventListener('click', async () => {
+      if(selectedIndex === null) return;
+      padVels[selectedIndex] = value;
+      saveSettings();
+      renderGrid();
+      if(value !== 'off'){
+        await ensureMotion();       // 加速度センサーの許可はこのタップの中で求める
+        renderPadBar();
+      }
+    });
+    velSeg.appendChild(b);
+  });
+
   function renderPadBar(){
     if(selectedIndex === null){ padbarEl.hidden = true; return; }
     padbarEl.hidden = false;
     padbarLabel.textContent = `P${page+1} · PAD ${String(selectedIndex+1).padStart(2,'0')}`;
     padModeSel.value = modeOf(selectedIndex);
+    const vk = velOf(selectedIndex);
+    [...velSeg.children].forEach(b => b.classList.toggle('active', b.dataset.v === vk));
+    // センサーが使えないと強弱がつかないので、その旨をラベルで示す
+    const bad = vk !== 'off' && (motionState === 'denied' || motionState === 'unsupported');
+    velLabel.textContent = bad ? 'VEL 不可' : 'VEL';
+    velLabel.classList.toggle('off', bad);
     const c = colorOf(selectedIndex);
     swatchRows.forEach(row => [...row.children].forEach(b => b.classList.toggle('on', b.dataset.color === c)));
   }
@@ -1003,6 +1148,7 @@
         padCount, voiceMode, panelOpen, page,
         pageColors: pages.map(pg => pg.colors),
         pageModes:  pages.map(pg => pg.modes),
+        pageVels:   pages.map(pg => pg.vels),
         pageBg:     pages.map(pg => pg.bg)
       }));
     }catch(e){}
@@ -1024,9 +1170,12 @@
       const isColorArray = a => Array.isArray(a) && a.every(c => typeof c === 'string');
       if(Array.isArray(s.pageColors)){
         pages = s.pageColors.filter(isColorArray).slice(0, PAGE_COUNT)
-                  .map(colors => ({ pads:[], colors: colors.slice(), modes:[] }));
+                  .map(colors => ({ pads:[], colors: colors.slice(), modes:[], vels:[] }));
       } else if(isColorArray(s.padColors)){
-        pages = [{ pads:[], colors: s.padColors.slice(), modes:[] }];   // 旧形式(単一ページ)
+        pages = [{ pads:[], colors: s.padColors.slice(), modes:[], vels:[] }];  // 旧形式(単一ページ)
+      }
+      if(Array.isArray(s.pageVels)){
+        s.pageVels.forEach((v, i) => { if(pages[i] && isColorArray(v)) pages[i].vels = v.slice(); });
       }
       if(Array.isArray(s.pageModes)){
         s.pageModes.forEach((m, i) => { if(pages[i] && isColorArray(m)) pages[i].modes = m.slice(); });
