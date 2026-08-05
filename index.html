@@ -46,20 +46,29 @@
     gap:10px;
   }
 
-  /* ---------- Header ---------- */
+  /* ---------- Header (minimal bar) ---------- */
   header{
-    display:flex; align-items:baseline; justify-content:space-between;
-    padding:2px 6px 0;
+    display:flex; align-items:center; justify-content:space-between;
+    gap:8px; padding:0 4px;
   }
   header .logo{
-    font-family:var(--mono); font-weight:700; font-size:15px; letter-spacing:0.14em;
-    color:var(--ink);
+    font-family:var(--mono); font-weight:700; font-size:12px; letter-spacing:0.14em;
+    color:var(--ink-dim); display:flex; align-items:center; gap:7px;
   }
   header .logo span{color:var(--amber);}
-  header .status{
-    font-family:var(--mono); font-size:10px; letter-spacing:0.08em; color:var(--ink-faint);
+  .dot{
+    width:6px; height:6px; border-radius:50%; background:#3a2e1c; flex:none;
   }
-  header .status.live{color:var(--teal);}
+  .dot.live{ background:var(--teal); box-shadow:0 0 6px var(--teal); }
+  .hdr-actions{ display:flex; gap:6px; }
+  .chip{
+    border:1px solid #332c22; background:#171310; color:var(--ink-dim);
+    font-family:var(--mono); font-size:12px; font-weight:600;
+    height:30px; min-width:36px; padding:0 9px; border-radius:9px;
+    display:flex; align-items:center; justify-content:center; gap:4px;
+  }
+  .chip.on{ color:var(--chassis); background:linear-gradient(180deg,#5cf0dc,var(--teal)); border-color:var(--teal); }
+  .chip:active{ filter:brightness(0.9); }
 
   /* ---------- Control panel ---------- */
   .panel{
@@ -70,6 +79,7 @@
     display:flex; flex-direction:column; gap:8px;
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 6px 16px rgba(0,0,0,0.35);
   }
+  .panel[hidden]{ display:none; }
   .row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .label{
     font-family:var(--mono); font-size:9px; letter-spacing:0.12em; color:var(--ink-faint);
@@ -107,7 +117,6 @@
   input[type=range]{
     flex:1; accent-color:var(--amber); height:22px;
   }
-  .hint{ font-family:var(--mono); font-size:9.5px; color:var(--ink-faint); line-height:1.5; padding:0 4px; }
 
   /* ---------- Pad grid ---------- */
   .stage{ flex:1; display:flex; min-height:0; }
@@ -162,12 +171,12 @@
   }
   .pad.cutmode.playing .led{ background:var(--teal); box-shadow:0 0 8px var(--teal); }
   .pad.editing{ outline:2px dashed var(--teal); outline-offset:-2px; }
+  /* 割当モード中は「タップ待ち」であることを示す */
+  body.assign .pad{ border-color:var(--teal-dim); }
+  body.assign .pad .padempty-icon{ color:var(--teal); }
 
   /* file input hidden */
   input[type=file]{ display:none; }
-
-  footer{ text-align:center; padding-bottom:2px; }
-  footer .hint{ text-align:center; }
 
   /* ---------- Toast ---------- */
   #toast{
@@ -188,11 +197,14 @@
 <body>
 
 <header>
-  <div class="logo">PAD<span>FEED</span></div>
-  <div class="status" id="audioStatus">TAP TO START AUDIO</div>
+  <div class="logo"><span class="dot" id="audioDot"></span>PAD<span>FEED</span></div>
+  <div class="hdr-actions">
+    <button class="chip" id="assignBtn" aria-pressed="false">✎ 割当</button>
+    <button class="chip" id="panelBtn" aria-expanded="false" aria-controls="panel">⚙</button>
+  </div>
 </header>
 
-<div class="panel">
+<div class="panel" id="panel" hidden>
   <div class="row">
     <div class="label">PADS</div>
     <div class="segmented" id="padCountSeg">
@@ -215,28 +227,18 @@
   <div class="row">
     <div class="label">VOL</div>
     <input type="range" id="vol" min="0" max="1" step="0.01" value="0.9">
-    <button class="btn" id="editBtn">✎ 割当</button>
-    <button class="btn accent" id="loadBtn">📂 音源を選択</button>
+    <button class="btn" id="clearBtn">🗑 全消去</button>
   </div>
-  <div class="hint" id="modeHint"></div>
 </div>
 
 <div class="stage"><div id="grid"></div></div>
 
 <div id="toast" role="status" aria-live="polite"></div>
 
-<footer>
-  <div class="hint">
-    iPhoneのダウンロードフォルダから読み込む手順：「📂 音源を選択」→「ファイルを選択」→ 左上「ブラウズ」→「このiPhone内」または「iCloud Drive」→「ダウンロード」→ 右上「選択」で複数タップ →「開く」。
-    空いているパッドへ自動で割り当てます。個別に差し替えたいときは「✎ 割当」をONにしてパッドをタップしてください。読み込んだ音は再読み込みすると消えるため、次回はまた選び直してください。
-  </div>
-</footer>
-
 <!-- accept は付けない。iOS Safari では accept="audio/*" を指定すると
      ファイルAppの「ダウンロード」内の mp3/wav が選択不可(グレーアウト)になるため。
      代わりに読み込み時にJS側で判定する。 -->
-<input type="file" id="fileInputMulti" multiple>
-<input type="file" id="fileInputSingle">
+<input type="file" id="fileInput" multiple>
 
 <script>
 (function(){
@@ -245,19 +247,13 @@
   // ---------------- State ----------------
   let padCount = 10;
   let playMode = 'cutpress';
-  let editMode = false;
-  let pendingEditIndex = null;
+  let assignMode = false;
+  let panelOpen = false;
+  // ファイル選択の開始パッド。パッドをタップしてからファイルを選ぶ。
+  let assignStartIndex = null;
 
-  // pads[i] = { name, buffer, decoding }
+  // pads[i] = { name, buffer }
   let pads = [];
-
-  const modeHints = {
-    press:      "PRESS：パッドを押した瞬間に鳴ります。複数パッドの同時再生OK。",
-    release:    "RELEASE：パッドから指を離した瞬間に鳴ります。複数パッドの同時再生OK。",
-    hold:       "HOLD：押している間だけ鳴り、指を離すと止まります。複数パッドの同時再生OK。",
-    cutpress:   "CUT IN (PRESS)：1音だけが鳴る排他モード。別パッドを押すと今鳴っている音が即座に止まり、新しい音に切り替わります。",
-    cutrelease: "CUT IN (RELEASE)：CUT INの派生。別パッドから指を離した瞬間に、今鳴っている音が止まり新しい音に切り替わります。"
-  };
 
   // ---------------- Audio engine ----------------
   let ctx = null;
@@ -273,14 +269,9 @@
     updateAudioStatus();
   }
   function updateAudioStatus(){
-    const el = document.getElementById('audioStatus');
-    if(ctx && ctx.state === 'running'){
-      el.textContent = 'AUDIO READY';
-      el.classList.add('live');
-    } else {
-      el.textContent = 'TAP TO START AUDIO';
-      el.classList.remove('live');
-    }
+    const el = document.getElementById('audioDot');
+    el.classList.toggle('live', !!(ctx && ctx.state === 'running'));
+    el.title = (ctx && ctx.state === 'running') ? 'AUDIO READY' : 'TAP TO START AUDIO';
   }
 
   // active poly voices per pad index (for hold-mode stop-on-release), keyed by pointerId
@@ -385,12 +376,13 @@
     el.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       ensureCtx();
-      if(editMode){
+      const p = pads[idx];
+      // 割当モード中、または空パッドをタップしたときはファイル選択へ。
+      // ここでタップしたパッドが、選んだファイルの割当先になる。
+      if(assignMode || !p.buffer){
         openAssignFor(idx);
         return;
       }
-      const p = pads[idx];
-      if(!p.buffer) return;
       pointerPad.set(e.pointerId, idx);
 
       if(playMode === 'press'){
@@ -432,53 +424,44 @@
   }
 
   // ---------------- File assignment ----------------
-  const fileInputMulti = document.getElementById('fileInputMulti');
-  const fileInputSingle = document.getElementById('fileInputSingle');
-
-  document.getElementById('loadBtn').addEventListener('click', () => {
-    ensureCtx();
-    fileInputMulti.value = '';
-    fileInputMulti.click();
-  });
+  // 割当先パッドを先にタップ → ファイル選択 → そのパッドから順に割り当てる
+  const fileInput = document.getElementById('fileInput');
 
   function openAssignFor(idx){
-    pendingEditIndex = idx;
-    fileInputSingle.value = '';
-    fileInputSingle.click();
+    assignStartIndex = idx;
+    fileInput.value = '';
+    fileInput.click();
   }
 
-  fileInputSingle.addEventListener('change', async (e) => {
-    const f = e.target.files[0];
-    if(!f || pendingEditIndex === null) return;
-    const idx = pendingEditIndex;
-    pendingEditIndex = null;
-    const ok = await assignFileToPad(idx, f);
-    showToast(ok ? `PAD ${String(idx+1).padStart(2,'0')} に「${f.name}」を割り当てました。`
-                 : `「${f.name}」は音声として読み込めませんでした。`, !ok);
-  });
-
-  fileInputMulti.addEventListener('change', async (e) => {
+  fileInput.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files || []);
-    if(!files.length) return;
-
-    if(!pads.some(p => !p.buffer)){
-      showToast('空きパッドがありません。「✎ 割当」をONにしてパッドをタップすると差し替えできます。', true);
-      return;
-    }
+    const start = assignStartIndex;
+    assignStartIndex = null;
+    if(!files.length || start === null) return;
 
     let loaded = 0, failed = 0, skipped = 0;
-    let slot = 0;
+    let slot = start;
+    let firstName = null;
     for(const f of files){
-      while(slot < pads.length && pads[slot].buffer) slot++;
       if(slot >= pads.length){ skipped++; continue; }
-      if(await assignFileToPad(slot, f)){ loaded++; slot++; }
-      else failed++;
+      if(await assignFileToPad(slot, f)){
+        if(firstName === null) firstName = f.name;
+        loaded++; slot++;
+      } else {
+        failed++;
+      }
     }
 
-    const parts = [`${loaded}個を読み込みました。`];
-    if(failed)  parts.push(`${failed}個は非対応の形式でした。`);
-    if(skipped) parts.push(`${skipped}個は空きパッド不足で読み込めませんでした。`);
-    showToast(parts.join(' '), loaded === 0);
+    let msg;
+    if(loaded === 1 && !failed && !skipped){
+      msg = `PAD ${String(start+1).padStart(2,'0')} → ${firstName}`;
+    } else {
+      const parts = [`PAD ${String(start+1).padStart(2,'0')} から ${loaded}個を割当。`];
+      if(failed)  parts.push(`${failed}個は非対応の形式。`);
+      if(skipped) parts.push(`${skipped}個はパッド数が足りず未割当。`);
+      msg = parts.join(' ');
+    }
+    showToast(msg, loaded === 0);
   });
 
   // 戻り値: 読み込みに成功したら true
@@ -523,7 +506,6 @@
   const playModeSel = document.getElementById('playMode');
   playModeSel.addEventListener('change', () => {
     playMode = playModeSel.value;
-    document.getElementById('modeHint').textContent = modeHints[playMode];
     // reset transient states
     heldVoices.forEach(v => stopVoiceSmooth(v));
     heldVoices.clear();
@@ -536,17 +518,40 @@
     if(master) master.gain.value = parseFloat(e.target.value);
   });
 
-  const editBtn = document.getElementById('editBtn');
-  editBtn.addEventListener('click', () => {
-    editMode = !editMode;
-    editBtn.classList.toggle('on', editMode);
-    editBtn.textContent = editMode ? '✎ 割当中…' : '✎ 割当';
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    if(cutVoice){ stopVoiceSmooth(cutVoice); cutVoice = null; }
+    heldVoices.forEach(v => stopVoiceSmooth(v));
+    heldVoices.clear();
+    pads = pads.map(() => ({ name:null, buffer:null }));
+    renderGrid();
+    showToast('全パッドを消去しました。');
   });
+
+  // 割当モード: ONの間はパッドをタップするとファイル選択が開く
+  const assignBtn = document.getElementById('assignBtn');
+  function setAssignMode(on){
+    assignMode = on;
+    assignBtn.classList.toggle('on', on);
+    assignBtn.setAttribute('aria-pressed', String(on));
+    document.body.classList.toggle('assign', on);
+  }
+  assignBtn.addEventListener('click', () => setAssignMode(!assignMode));
+
+  // コントロールパネルの折りたたみ
+  const panelEl = document.getElementById('panel');
+  const panelBtn = document.getElementById('panelBtn');
+  function setPanelOpen(open){
+    panelOpen = open;
+    panelEl.hidden = !open;
+    panelBtn.classList.toggle('on', open);
+    panelBtn.setAttribute('aria-expanded', String(open));
+  }
+  panelBtn.addEventListener('click', () => { setPanelOpen(!panelOpen); saveSettings(); });
 
   // ---------------- Settings persistence (layout only, not audio) ----------------
   function saveSettings(){
     try{
-      localStorage.setItem('padfeed_settings', JSON.stringify({ padCount, playMode }));
+      localStorage.setItem('padfeed_settings', JSON.stringify({ padCount, playMode, panelOpen }));
     }catch(e){}
   }
   function loadSettings(){
@@ -556,6 +561,7 @@
       const s = JSON.parse(raw);
       if(s.padCount) padCount = s.padCount;
       if(s.playMode) playMode = s.playMode;
+      if(typeof s.panelOpen === 'boolean') panelOpen = s.panelOpen;
     }catch(e){}
   }
 
@@ -566,7 +572,8 @@
     b.classList.toggle('active', parseInt(b.dataset.n,10) === padCount);
   });
   playModeSel.value = playMode;
-  document.getElementById('modeHint').textContent = modeHints[playMode];
+  setPanelOpen(panelOpen);
+  setAssignMode(false);
 
   for(let i=0;i<padCount;i++) pads.push({ name:null, buffer:null });
   renderGrid();
