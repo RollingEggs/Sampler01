@@ -168,6 +168,21 @@
 
   footer{ text-align:center; padding-bottom:2px; }
   footer .hint{ text-align:center; }
+
+  /* ---------- Toast ---------- */
+  #toast{
+    position:fixed; left:50%; transform:translateX(-50%) translateY(12px);
+    bottom: max(16px, env(safe-area-inset-bottom));
+    max-width:min(92vw, 420px);
+    background:#1c1712; border:1px solid #4a3c28; border-radius:11px;
+    color:var(--ink); font-family:var(--mono); font-size:11px; line-height:1.5;
+    padding:10px 14px; text-align:center;
+    box-shadow:0 8px 24px rgba(0,0,0,0.5);
+    opacity:0; pointer-events:none; transition:opacity .18s, transform .18s;
+    z-index:50;
+  }
+  #toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+  #toast.err{ border-color:var(--danger); color:#ffd9d9; }
 </style>
 </head>
 <body>
@@ -208,12 +223,20 @@
 
 <div class="stage"><div id="grid"></div></div>
 
+<div id="toast" role="status" aria-live="polite"></div>
+
 <footer>
-  <div class="hint">iOSの仕様上フォルダの直接指定はできません。「音源を選択」で複数のwav/mp3をまとめて選び、空いているパッドへ自動で割り当てます。個別に差し替えたいときは「✎ 割当」をONにしてパッドをタップしてください。読み込んだ音は再読み込みすると消えるため、次回はまた選び直してください。</div>
+  <div class="hint">
+    iPhoneのダウンロードフォルダから読み込む手順：「📂 音源を選択」→「ファイルを選択」→ 左上「ブラウズ」→「このiPhone内」または「iCloud Drive」→「ダウンロード」→ 右上「選択」で複数タップ →「開く」。
+    空いているパッドへ自動で割り当てます。個別に差し替えたいときは「✎ 割当」をONにしてパッドをタップしてください。読み込んだ音は再読み込みすると消えるため、次回はまた選び直してください。
+  </div>
 </footer>
 
-<input type="file" id="fileInputMulti" accept="audio/*" multiple>
-<input type="file" id="fileInputSingle" accept="audio/*">
+<!-- accept は付けない。iOS Safari では accept="audio/*" を指定すると
+     ファイルAppの「ダウンロード」内の mp3/wav が選択不可(グレーアウト)になるため。
+     代わりに読み込み時にJS側で判定する。 -->
+<input type="file" id="fileInputMulti" multiple>
+<input type="file" id="fileInputSingle">
 
 <script>
 (function(){
@@ -427,25 +450,38 @@
   fileInputSingle.addEventListener('change', async (e) => {
     const f = e.target.files[0];
     if(!f || pendingEditIndex === null) return;
-    await assignFileToPad(pendingEditIndex, f);
+    const idx = pendingEditIndex;
     pendingEditIndex = null;
+    const ok = await assignFileToPad(idx, f);
+    showToast(ok ? `PAD ${String(idx+1).padStart(2,'0')} に「${f.name}」を割り当てました。`
+                 : `「${f.name}」は音声として読み込めませんでした。`, !ok);
   });
 
   fileInputMulti.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files || []);
     if(!files.length) return;
+
+    if(!pads.some(p => !p.buffer)){
+      showToast('空きパッドがありません。「✎ 割当」をONにしてパッドをタップすると差し替えできます。', true);
+      return;
+    }
+
+    let loaded = 0, failed = 0, skipped = 0;
     let slot = 0;
     for(const f of files){
       while(slot < pads.length && pads[slot].buffer) slot++;
-      if(slot >= pads.length) break;
-      await assignFileToPad(slot, f);
-      slot++;
+      if(slot >= pads.length){ skipped++; continue; }
+      if(await assignFileToPad(slot, f)){ loaded++; slot++; }
+      else failed++;
     }
-    if(files.length > pads.filter(p=>p.buffer).length){
-      // some files didn't fit — just informational, non-blocking
-    }
+
+    const parts = [`${loaded}個を読み込みました。`];
+    if(failed)  parts.push(`${failed}個は非対応の形式でした。`);
+    if(skipped) parts.push(`${skipped}個は空きパッド不足で読み込めませんでした。`);
+    showToast(parts.join(' '), loaded === 0);
   });
 
+  // 戻り値: 読み込みに成功したら true
   async function assignFileToPad(idx, file){
     ensureCtx();
     const el = gridEl.children[idx];
@@ -453,11 +489,25 @@
     try{
       const arrayBuf = await file.arrayBuffer();
       const audioBuf = await ctx.decodeAudioData(arrayBuf.slice(0));
-      pads[idx] = { name: file.name.replace(/\.(wav|mp3|m4a|aac|ogg)$/i,''), buffer: audioBuf };
+      pads[idx] = { name: file.name.replace(/\.[^.]+$/,''), buffer: audioBuf };
+      renderGrid();
+      return true;
     }catch(err){
-      pads[idx] = { name: '読込失敗: '+file.name, buffer: null };
+      // 失敗したパッドは空きのまま残す(次のファイルがここに入る)
+      renderGrid();
+      return false;
     }
-    renderGrid();
+  }
+
+  // ---------------- Toast ----------------
+  const toastEl = document.getElementById('toast');
+  let toastTimer = null;
+  function showToast(msg, isError){
+    toastEl.textContent = msg;
+    toastEl.classList.toggle('err', !!isError);
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 4000);
   }
 
   // ---------------- Controls ----------------
