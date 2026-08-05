@@ -170,10 +170,20 @@
     box-shadow: 0 0 0 2px rgba(51,214,192,0.35), 0 0 22px rgba(51,214,192,0.45);
   }
   .pad.cutmode.playing .led{ background:var(--teal); box-shadow:0 0 8px var(--teal); }
-  .pad.editing{ outline:2px dashed var(--teal); outline-offset:-2px; }
   /* 割当モード中は「タップ待ち」であることを示す */
   body.assign .pad{ border-color:var(--teal-dim); }
   body.assign .pad .padempty-icon{ color:var(--teal); }
+  /* 割当先として選択中のパッド */
+  .pad.selected{
+    border-color:var(--teal); border-style:solid;
+    box-shadow: 0 0 0 2px var(--teal), 0 0 18px rgba(51,214,192,0.45), inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+  .pad.selected .padempty-icon{ color:var(--teal); }
+  .pad .padtag{
+    position:absolute; top:7px; right:9px;
+    font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:.08em;
+    color:var(--teal);
+  }
 
   /* file input hidden */
   input[type=file]{ display:none; }
@@ -200,6 +210,7 @@
   <div class="logo"><span class="dot" id="audioDot"></span>PAD<span>FEED</span></div>
   <div class="hdr-actions">
     <button class="chip" id="assignBtn" aria-pressed="false">✎ 割当</button>
+    <button class="chip" id="fileBtn">📂 ファイル</button>
     <button class="chip" id="panelBtn" aria-expanded="false" aria-controls="panel">⚙</button>
   </div>
 </header>
@@ -249,7 +260,9 @@
   let playMode = 'cutpress';
   let assignMode = false;
   let panelOpen = false;
-  // ファイル選択の開始パッド。パッドをタップしてからファイルを選ぶ。
+  // 割当先として選択中のパッド。パッドをタップ → 📂 でファイルを選ぶ。
+  let selectedIndex = null;
+  // ファイル選択ダイアログを開いた時点の開始パッド
   let assignStartIndex = null;
 
   // pads[i] = { name, buffer }
@@ -346,6 +359,7 @@
       pads.push(old[i] || { name:null, buffer:null });
     }
     padCount = newCount;
+    if(selectedIndex !== null && selectedIndex >= newCount) selectedIndex = null;
     renderGrid();
   }
 
@@ -357,11 +371,14 @@
     for(let i=0;i<padCount;i++){
       const p = pads[i];
       const el = document.createElement('div');
-      el.className = 'pad' + (p.buffer ? ' assigned' : ' empty') + (playMode.startsWith('cut') ? ' cutmode' : '');
+      el.className = 'pad' + (p.buffer ? ' assigned' : ' empty')
+        + (playMode.startsWith('cut') ? ' cutmode' : '')
+        + (i === selectedIndex ? ' selected' : '');
       el.dataset.idx = i;
+      const tag = i === selectedIndex ? `<div class="padtag">選択中</div>` : '';
       el.innerHTML = p.buffer
-        ? `<div class="led"></div><div class="padnum">PAD ${String(i+1).padStart(2,'0')}</div><div class="padname">${escapeHtml(p.name)}</div>`
-        : `<div class="padempty-icon">＋</div>`;
+        ? `${tag || '<div class="led"></div>'}<div class="padnum">PAD ${String(i+1).padStart(2,'0')}</div><div class="padname">${escapeHtml(p.name)}</div>`
+        : `${tag}<div class="padempty-icon">＋</div>`;
       attachPadEvents(el, i);
       gridEl.appendChild(el);
     }
@@ -377,10 +394,10 @@
       e.preventDefault();
       ensureCtx();
       const p = pads[idx];
-      // 割当モード中、または空パッドをタップしたときはファイル選択へ。
-      // ここでタップしたパッドが、選んだファイルの割当先になる。
+      // 割当モード中、または空パッドをタップしたときは「割当先の選択」。
+      // 実際のファイル選択は 📂 ボタンで行う。
       if(assignMode || !p.buffer){
-        openAssignFor(idx);
+        selectPad(idx);
         return;
       }
       pointerPad.set(e.pointerId, idx);
@@ -424,20 +441,42 @@
   }
 
   // ---------------- File assignment ----------------
-  // 割当先パッドを先にタップ → ファイル選択 → そのパッドから順に割り当てる
+  // ①パッドをタップして割当先を選択 → ②📂 でファイルを選ぶ → そのパッドから順に割り当て
   const fileInput = document.getElementById('fileInput');
 
-  function openAssignFor(idx){
-    assignStartIndex = idx;
+  function selectPad(idx){
+    selectedIndex = (selectedIndex === idx) ? null : idx;
+    renderGrid();
+    if(selectedIndex !== null){
+      showToast(`PAD ${String(idx+1).padStart(2,'0')} を選択 → 「📂 ファイル」で音源を選ぶと割り当てます。`);
+    }
+  }
+
+  function clearSelection(){
+    if(selectedIndex === null) return;
+    selectedIndex = null;
+    renderGrid();
+  }
+
+  document.getElementById('fileBtn').addEventListener('click', () => {
+    ensureCtx();
+    let start = selectedIndex;
+    if(start === null) start = pads.findIndex(p => !p.buffer);   // 未選択なら最初の空きパッドから
+    if(start < 0){
+      showToast('割当先のパッドをタップしてから「📂 ファイル」を押してください。', true);
+      return;
+    }
+    assignStartIndex = start;
     fileInput.value = '';
     fileInput.click();
-  }
+  });
 
   fileInput.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files || []);
     const start = assignStartIndex;
     assignStartIndex = null;
     if(!files.length || start === null) return;
+    clearSelection();
 
     let loaded = 0, failed = 0, skipped = 0;
     let slot = start;
@@ -523,6 +562,7 @@
     heldVoices.forEach(v => stopVoiceSmooth(v));
     heldVoices.clear();
     pads = pads.map(() => ({ name:null, buffer:null }));
+    selectedIndex = null;
     renderGrid();
     showToast('全パッドを消去しました。');
   });
@@ -534,8 +574,12 @@
     assignBtn.classList.toggle('on', on);
     assignBtn.setAttribute('aria-pressed', String(on));
     document.body.classList.toggle('assign', on);
+    if(!on) clearSelection();
   }
-  assignBtn.addEventListener('click', () => setAssignMode(!assignMode));
+  assignBtn.addEventListener('click', () => {
+    setAssignMode(!assignMode);
+    if(assignMode) showToast('割当先のパッドをタップしてください。');
+  });
 
   // コントロールパネルの折りたたみ
   const panelEl = document.getElementById('panel');
