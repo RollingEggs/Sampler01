@@ -431,30 +431,27 @@
     const m = v => Math.round(v * (1 - t) + 10 * t);
     return `rgb(${m((n>>16)&255)},${m((n>>8)&255)},${m(n&255)})`;
   }
-  const BACKGROUNDS = [
-    'radial-gradient(ellipse at 20% -10%, #2a2117 0%, transparent 55%),' +
-    'radial-gradient(ellipse at 100% 110%, #1c1712 0%, transparent 50%), #17140f'
-  ].concat(
+  // ページが変わったことが一目で分かるよう、背景ははっきりした単色にする
+  const BACKGROUNDS = ['#1a1610'].concat(
     ['#ff5c5c','#ff9f1c','#ffe14d','#7bd94f','#33d6c0','#35c1e8','#5aa9ff','#b07cff','#ff6fb5']
-      .map(h =>
-        `radial-gradient(ellipse at 22% -12%, ${shade(h,0.72)} 0%, transparent 58%),` +
-        `radial-gradient(ellipse at 100% 112%, ${shade(h,0.86)} 0%, transparent 52%), #12100d`)
+      .map(h => shade(h, 0.34))
   );
 
   function makePage(){
     return {
       pads:   Array.from({length: padCount}, () => ({ name:null, buffer:null })),
-      colors: Array.from({length: padCount}, (_, i) => defaultColor(i)),
-      bg: 0
+      colors: Array.from({length: padCount}, (_, i) => defaultColor(i))
+      // bg は ensurePages がページ番号ごとの既定を入れる
     };
   }
   // 全ページを padCount に合わせる(音と色は残す)
   function ensurePages(){
     while(pages.length < PAGE_COUNT) pages.push(makePage());
-    pages.forEach(pg => {
+    pages.forEach((pg, i) => {
       while(pg.pads.length   < padCount) pg.pads.push({ name:null, buffer:null });
       while(pg.colors.length < padCount) pg.colors.push(defaultColor(pg.colors.length));
-      if(typeof pg.bg !== 'number' || !BACKGROUNDS[pg.bg]) pg.bg = 0;
+      // 未設定なら「ページごとに違う背景」を既定にする
+      if(typeof pg.bg !== 'number' || !BACKGROUNDS[pg.bg]) pg.bg = i % BACKGROUNDS.length;
     });
   }
   function usePage(p){
@@ -957,7 +954,9 @@
       } else if(isColorArray(s.padColors)){
         pages = [{ pads:[], colors: s.padColors.slice() }];   // 旧形式(単一ページ)からの移行
       }
-      if(Array.isArray(s.pageBg)) s.pageBg.forEach((v, i) => { if(pages[i]) pages[i].bg = v; });
+      if(Array.isArray(s.pageBg) && s.pageBg.some(v => v)){
+        s.pageBg.forEach((v, i) => { if(pages[i]) pages[i].bg = v; });
+      }
       if(typeof s.page === 'number') page = s.page;
     }catch(e){}
   }
