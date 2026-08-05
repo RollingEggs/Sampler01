@@ -203,23 +203,50 @@
 
   /* ---------- 選択中パッドの操作バー ---------- */
   #padbar{
-    display:flex; align-items:center; gap:7px;
+    display:flex; flex-direction:column; gap:5px;
     background:linear-gradient(180deg,var(--panel),var(--chassis-2));
     border:1px solid #362d21; border-radius:var(--radius);
-    padding:6px 8px;
+    padding:6px 8px 7px;
   }
   #padbar[hidden]{ display:none; }
+  .pbrow{ display:flex; align-items:center; gap:8px; }
   #padbar .pblabel{
     font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:.08em;
-    color:var(--teal); white-space:nowrap;
+    color:var(--teal); white-space:nowrap; flex:1;
   }
-  #swatches{ display:flex; gap:5px; flex:1; justify-content:space-between; }
+  #padbar .pbhint{
+    font-family:var(--mono); font-size:8.5px; letter-spacing:.06em; color:var(--ink-faint);
+  }
+  .swrow{ display:flex; gap:3px; }
   .swatch{
-    width:26px; height:26px; border-radius:50%; padding:0;
-    border:2px solid #171310; box-shadow:0 0 0 1px #332c22;
+    flex:1; height:24px; min-width:0; padding:0;
+    border:1px solid rgba(0,0,0,0.45); border-radius:6px;
   }
-  .swatch.on{ box-shadow:0 0 0 2px var(--ink); transform:scale(1.08); }
+  .swatch.on{ box-shadow:0 0 0 2px var(--ink); }
   .chip.danger{ color:var(--danger); border-color:#5a2b2b; }
+
+  /* ---------- ページ切替バー(最下部) ---------- */
+  #pagebar{
+    display:flex; align-items:center; gap:4px;
+    padding:0 2px;
+  }
+  .pgarrow{
+    border:1px solid #332c22; background:#171310; color:var(--ink-dim);
+    font-family:var(--mono); font-size:16px; font-weight:700; line-height:1;
+    width:34px; height:26px; border-radius:8px; flex:none;
+  }
+  .pgarrow:active{ filter:brightness(0.85); }
+  #pagedots{ display:flex; flex:1; gap:2px; }
+  .pgdot{
+    flex:1; height:26px; min-width:0; padding:0;
+    border:1px solid transparent; background:transparent; border-radius:8px;
+    font-family:var(--mono); font-size:11px; font-weight:600; color:var(--ink-faint);
+  }
+  .pgdot.has{ color:var(--ink-dim); border-color:#332c22; }
+  .pgdot.on{
+    color:var(--chassis); background:linear-gradient(180deg,#ffb066,var(--amber));
+    border-color:var(--amber);
+  }
 </style>
 </head>
 <body>
@@ -256,17 +283,27 @@
   <div class="row">
     <div class="label">VOL</div>
     <input type="range" id="vol" min="0" max="1" step="0.01" value="0.9">
-    <button class="btn" id="clearBtn">🗑 全消去</button>
+    <button class="btn" id="clearBtn">🗑 ページ消去</button>
   </div>
 </div>
 
 <div id="padbar" hidden>
-  <div class="pblabel" id="padbarLabel">PAD 01</div>
-  <div id="swatches"></div>
-  <button class="chip danger" id="deleteBtn" aria-label="このパッドの音を削除">🗑</button>
+  <div class="pbrow">
+    <div class="pblabel" id="padbarLabel">PAD 01</div>
+    <div class="pbhint">GRAD / SOLID</div>
+    <button class="chip danger" id="deleteBtn" aria-label="このパッドの音を削除">🗑</button>
+  </div>
+  <div class="swrow" id="swGrad"></div>
+  <div class="swrow" id="swFlat"></div>
 </div>
 
 <div class="stage"><div id="grid"></div></div>
+
+<div id="pagebar">
+  <button class="pgarrow" id="prevPage" aria-label="前のページ">‹</button>
+  <div id="pagedots"></div>
+  <button class="pgarrow" id="nextPage" aria-label="次のページ">›</button>
+</div>
 
 <!-- accept は付けない。iOS Safari では accept="audio/*" を指定すると
      ファイルAppの「ダウンロード」内の mp3/wav が選択不可(グレーアウト)になるため。
@@ -287,29 +324,65 @@
   // ファイル選択ダイアログを開いた時点の開始パッド
   let assignStartIndex = null;
 
-  // pads[i] = { name, buffer }
-  let pads = [];
-  // パッドごとの色(音源と違い localStorage に保存される)
-  const PALETTE = ['#ff8a34','#ffd23f','#7bd94f','#33d6c0','#5aa9ff','#b07cff','#ff6fb5','#ff5c5c'];
-  let padColors = [];
+  // ---------------- ページ ----------------
+  // 10ページ分のパッドセット。ページを切り替えると別の音・別の色になる。
+  const PAGE_COUNT = 10;
+  let page = 0;
+  let pages = [];               // pages[p] = { pads:[{name,buffer}], colors:['#hex' | '#hex|f'] }
+  let pads = [];                // 現在のページの pads(参照)
+  let padColors = [];           // 現在のページの colors(参照)
+
+  // 15色 × (グラデ / 単色) = 30バリエーション
+  const HUES = [
+    '#ff5c5c','#ff7a3c','#ff9f1c','#ffc93c','#ffe14d',
+    '#c6e34a','#7bd94f','#3fd08a','#33d6c0','#35c1e8',
+    '#5aa9ff','#7b8cff','#b07cff','#e070e8','#ff6fb5'
+  ];
 
   function hexToRgba(hex, a){
     const n = parseInt(hex.slice(1), 16);
     return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
   }
-  // t=0 で原色、t=1 で白。パッド面のパステル調グラデーションに使う
+  // t=0 で原色、t=1 で白。パッド面のパステル調に使う
   function tint(hex, t){
     const n = parseInt(hex.slice(1), 16);
     const m = v => Math.round(v + (255 - v) * t);
     return `rgb(${m((n>>16)&255)},${m((n>>8)&255)},${m(n&255)})`;
   }
-  function padFace(hex){
-    return `linear-gradient(168deg, ${tint(hex,0.62)} 0%, ${tint(hex,0.24)} 100%)`;
+  // 色の保存形式: "#rrggbb"(グラデ) / "#rrggbb|f"(単色)
+  function baseHex(v){ return (v || HUES[0]).split('|')[0]; }
+  function isFlat(v){ return (v || '').endsWith('|f'); }
+  function faceStops(v){
+    const hex = baseHex(v);
+    return isFlat(v) ? [tint(hex,0.42), tint(hex,0.42)] : [tint(hex,0.62), tint(hex,0.24)];
   }
-  function colorOf(i){ return padColors[i] || PALETTE[0]; }
-  function ensurePadColors(){
-    while(padColors.length < padCount) padColors.push(PALETTE[0]);
+  function padFace(v){
+    const [a, b] = faceStops(v);
+    return `linear-gradient(168deg, ${a} 0%, ${b} 100%)`;
   }
+  function defaultColor(i){ return HUES[i % HUES.length]; }
+  function colorOf(i){ return padColors[i] || defaultColor(i); }
+
+  function makePage(){
+    return {
+      pads:   Array.from({length: padCount}, () => ({ name:null, buffer:null })),
+      colors: Array.from({length: padCount}, (_, i) => defaultColor(i))
+    };
+  }
+  // 全ページを padCount に合わせる(音と色は残す)
+  function ensurePages(){
+    while(pages.length < PAGE_COUNT) pages.push(makePage());
+    pages.forEach(pg => {
+      while(pg.pads.length   < padCount) pg.pads.push({ name:null, buffer:null });
+      while(pg.colors.length < padCount) pg.colors.push(defaultColor(pg.colors.length));
+    });
+  }
+  function usePage(p){
+    page = ((p % PAGE_COUNT) + PAGE_COUNT) % PAGE_COUNT;
+    pads = pages[page].pads;
+    padColors = pages[page].colors;
+  }
+  function pageHasSound(p){ return pages[p].pads.some(x => x.buffer); }
 
   // ---------------- Audio engine ----------------
   let ctx = null;
@@ -395,15 +468,13 @@
     }
   }
 
+  // パッド数はページ共通。増やしたときは全ページに枠を足す(音と色は保持)
   function rebuildPads(newCount){
-    const old = pads;
-    pads = [];
-    for(let i=0;i<newCount;i++){
-      pads.push(old[i] || { name:null, buffer:null });
-    }
     padCount = newCount;
-    ensurePadColors();
+    ensurePages();
+    usePage(page);
     if(selectedIndex !== null && selectedIndex >= newCount) selectedIndex = null;
+    stopAllVoices();
     renderGrid();
   }
 
@@ -419,11 +490,11 @@
         + (playMode.startsWith('cut') ? ' cutmode' : '')
         + (i === selectedIndex ? ' selected' : '');
       el.dataset.idx = i;
-      const c = colorOf(i);
-      el.style.setProperty('--pc', c);
-      el.style.setProperty('--pc-lite', tint(c, 0.62));
-      el.style.setProperty('--pc-mid', tint(c, 0.24));
-      el.style.setProperty('--pc-a45', hexToRgba(c, 0.45));
+      const v = colorOf(i), hex = baseHex(v), stops = faceStops(v);
+      el.style.setProperty('--pc', hex);
+      el.style.setProperty('--pc-lite', stops[0]);
+      el.style.setProperty('--pc-mid', stops[1]);
+      el.style.setProperty('--pc-a45', hexToRgba(hex, 0.45));
       const tag = i === selectedIndex ? `<div class="padtag">選択中</div>` : '';
       el.innerHTML = p.buffer
         ? `${tag}<div class="padnum">${i+1}</div><div class="padname">${escapeHtml(p.name)}</div>`
@@ -444,12 +515,12 @@
       e.preventDefault();
       ensureCtx();
       const p = pads[idx];
-      // 割当モード中、または空パッドをタップしたときは「割当先の選択」。
-      // 実際のファイル選択は 📂 ボタンで行う。
-      if(assignMode || !p.buffer){
+      // 「✎ 割当」ON のときはパッドを選ぶだけ(色の変更・ファイル割当・削除の対象)
+      if(assignMode){
         selectPad(idx);
         return;
       }
+      if(!p.buffer) return;
       pointerPad.set(e.pointerId, idx);
 
       if(playMode === 'press'){
@@ -559,29 +630,33 @@
   // ---------------- 選択中パッドの操作バー(色の変更 / 削除) ----------------
   const padbarEl = document.getElementById('padbar');
   const padbarLabel = document.getElementById('padbarLabel');
-  const swatchesEl = document.getElementById('swatches');
+  const swatchRows = [document.getElementById('swGrad'), document.getElementById('swFlat')];
 
-  PALETTE.forEach(c => {
-    const b = document.createElement('button');
-    b.className = 'swatch';
-    b.style.background = padFace(c);   // パッド面と同じ見え方にする
-    b.dataset.color = c;
-    b.setAttribute('aria-label', 'パッドの色: ' + c);
-    b.addEventListener('click', () => {
-      if(selectedIndex === null) return;
-      padColors[selectedIndex] = c;
-      saveSettings();
-      renderGrid();
+  // 上段=グラデーション15色 / 下段=単色15色(同じ列が同じ色相)
+  [['', swatchRows[0]], ['|f', swatchRows[1]]].forEach(([suffix, row]) => {
+    HUES.forEach(hex => {
+      const v = hex + suffix;
+      const b = document.createElement('button');
+      b.className = 'swatch';
+      b.style.background = padFace(v);   // パッド面と同じ見え方にする
+      b.dataset.color = v;
+      b.setAttribute('aria-label', 'パッドの色: ' + v);
+      b.addEventListener('click', () => {
+        if(selectedIndex === null) return;
+        padColors[selectedIndex] = v;
+        saveSettings();
+        renderGrid();
+      });
+      row.appendChild(b);
     });
-    swatchesEl.appendChild(b);
   });
 
   function renderPadBar(){
     if(selectedIndex === null){ padbarEl.hidden = true; return; }
     padbarEl.hidden = false;
-    padbarLabel.textContent = `PAD ${String(selectedIndex+1).padStart(2,'0')}`;
+    padbarLabel.textContent = `P${page+1} · PAD ${String(selectedIndex+1).padStart(2,'0')}`;
     const c = colorOf(selectedIndex);
-    [...swatchesEl.children].forEach(b => b.classList.toggle('on', b.dataset.color === c));
+    swatchRows.forEach(row => [...row.children].forEach(b => b.classList.toggle('on', b.dataset.color === c)));
   }
 
   // 選択中パッドの音を削除(色と選択状態はそのまま残す)
@@ -599,6 +674,42 @@
     });
   }
 
+  function stopAllVoices(){
+    if(cutVoice){ stopVoiceSmooth(cutVoice); cutVoice = null; }
+    heldVoices.forEach(v => stopVoiceSmooth(v));
+    heldVoices.clear();
+    pointerPad.clear();
+  }
+
+  // ---------------- ページ切替(最下部のバー) ----------------
+  const pagedotsEl = document.getElementById('pagedots');
+  for(let p = 0; p < PAGE_COUNT; p++){
+    const b = document.createElement('button');
+    b.className = 'pgdot';
+    b.textContent = String(p+1);
+    b.setAttribute('aria-label', `ページ ${p+1}`);
+    b.addEventListener('click', () => goToPage(p));
+    pagedotsEl.appendChild(b);
+  }
+  document.getElementById('prevPage').addEventListener('click', () => goToPage(page - 1));
+  document.getElementById('nextPage').addEventListener('click', () => goToPage(page + 1));
+
+  function goToPage(p){
+    stopAllVoices();          // ページが変わるとパッドの中身も変わるので鳴らしっぱなしを防ぐ
+    selectedIndex = null;
+    usePage(p);
+    renderGrid();
+    renderPageBar();
+    saveSettings();
+  }
+
+  function renderPageBar(){
+    [...pagedotsEl.children].forEach((b, p) => {
+      b.classList.toggle('on', p === page);
+      b.classList.toggle('has', p !== page && pageHasSound(p));
+    });
+  }
+
   // ---------------- Controls ----------------
   document.getElementById('padCountSeg').addEventListener('click', (e) => {
     const btn = e.target.closest('button');
@@ -612,10 +723,7 @@
   const playModeSel = document.getElementById('playMode');
   playModeSel.addEventListener('change', () => {
     playMode = playModeSel.value;
-    // reset transient states
-    heldVoices.forEach(v => stopVoiceSmooth(v));
-    heldVoices.clear();
-    if(cutVoice){ stopVoiceSmooth(cutVoice); cutVoice = null; }
+    stopAllVoices();
     renderGrid();
     saveSettings();
   });
@@ -624,13 +732,13 @@
     if(master) master.gain.value = parseFloat(e.target.value);
   });
 
+  // 表示中ページのパッドだけ消す(他のページはそのまま)
   document.getElementById('clearBtn').addEventListener('click', () => {
-    if(cutVoice){ stopVoiceSmooth(cutVoice); cutVoice = null; }
-    heldVoices.forEach(v => stopVoiceSmooth(v));
-    heldVoices.clear();
-    pads = pads.map(() => ({ name:null, buffer:null }));
+    stopAllVoices();
+    for(let i=0;i<pads.length;i++) pads[i] = { name:null, buffer:null };
     selectedIndex = null;
     renderGrid();
+    renderPageBar();
   });
 
   // 割当モード: ONの間はパッドをタップするとファイル選択が開く
@@ -658,7 +766,10 @@
   // ---------------- Settings persistence (layout only, not audio) ----------------
   function saveSettings(){
     try{
-      localStorage.setItem('padfeed_settings', JSON.stringify({ padCount, playMode, panelOpen, padColors }));
+      localStorage.setItem('padfeed_settings', JSON.stringify({
+        padCount, playMode, panelOpen, page,
+        pageColors: pages.map(pg => pg.colors)
+      }));
     }catch(e){}
   }
   function loadSettings(){
@@ -669,7 +780,14 @@
       if(s.padCount) padCount = s.padCount;
       if(s.playMode) playMode = s.playMode;
       if(typeof s.panelOpen === 'boolean') panelOpen = s.panelOpen;
-      if(Array.isArray(s.padColors)) padColors = s.padColors.filter(c => typeof c === 'string');
+      const isColorArray = a => Array.isArray(a) && a.every(c => typeof c === 'string');
+      if(Array.isArray(s.pageColors)){
+        pages = s.pageColors.filter(isColorArray).slice(0, PAGE_COUNT)
+                  .map(colors => ({ pads:[], colors: colors.slice() }));
+      } else if(isColorArray(s.padColors)){
+        pages = [{ pads:[], colors: s.padColors.slice() }];   // 旧形式(単一ページ)からの移行
+      }
+      if(typeof s.page === 'number') page = s.page;
     }catch(e){}
   }
 
@@ -683,9 +801,10 @@
   setPanelOpen(panelOpen);
   setAssignMode(false);
 
-  for(let i=0;i<padCount;i++) pads.push({ name:null, buffer:null });
-  ensurePadColors();
+  ensurePages();
+  usePage(page);
   renderGrid();
+  renderPageBar();
 
   document.body.addEventListener('pointerdown', ensureCtx, {once:false});
 
