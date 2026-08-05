@@ -219,6 +219,12 @@
     box-shadow: 0 0 0 2px var(--teal), 0 0 18px rgba(51,214,192,0.45), inset 0 1px 0 rgba(255,255,255,0.06);
   }
   .pad.selected .padempty-icon{ color:var(--teal); }
+  .pad .modetag{
+    position:absolute; top:7px; right:9px; z-index:1;
+    font-family:var(--mono); font-size:8.5px; font-weight:700; letter-spacing:.06em;
+    color:rgba(255,255,255,0.75); text-shadow:0 1px 2px rgba(0,0,0,0.35);
+  }
+  .pad.lightface .modetag{ color:rgba(20,15,8,0.5); text-shadow:none; }
   .pad .padtag{
     position:absolute; top:6px; right:7px; z-index:1;
     font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:.08em;
@@ -240,11 +246,9 @@
   .pbrow{ display:flex; align-items:center; gap:8px; }
   #padbar .pblabel{
     font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:.08em;
-    color:var(--teal); white-space:nowrap; flex:1;
+    color:var(--teal); white-space:nowrap; flex:none;
   }
-  #padbar .pbhint{
-    font-family:var(--mono); font-size:8.5px; letter-spacing:.06em; color:var(--ink-faint);
-  }
+  #padModeSel{ font-size:11px; padding:6px 22px 6px 8px; flex:2; min-width:0; }
   .swrow{ display:flex; gap:3px; }
   .swatch{
     flex:1; height:24px; min-width:0; padding:0;
@@ -319,14 +323,11 @@
     </div>
   </div>
   <div class="row">
-    <div class="label">MODE</div>
-    <select id="playMode" class="styled">
-      <option value="press">PRESS — 押したら再生(ポリ)</option>
-      <option value="release">RELEASE — 離したら再生(ポリ)</option>
-      <option value="hold">HOLD — 押している間だけ(ポリ)</option>
-      <option value="cutpress" selected>CUT IN (PRESS) — 押した瞬間に切替</option>
-      <option value="cutrelease">CUT IN (RELEASE) — 離した瞬間に切替</option>
-    </select>
+    <div class="label">VOICE</div>
+    <div class="segmented" id="voiceSeg">
+      <button data-v="poly">POLY 同時に鳴らす</button>
+      <button data-v="mono">MONO 1音だけ</button>
+    </div>
   </div>
   <div class="row">
     <div class="label">VOL</div>
@@ -342,7 +343,7 @@
 <div id="padbar" hidden>
   <div class="pbrow">
     <div class="pblabel" id="padbarLabel">PAD 01</div>
-    <div class="pbhint">GRAD / SOLID</div>
+    <select id="padModeSel" class="styled"></select>
     <button class="chip danger" id="deleteBtn" aria-label="このパッドの音を削除">🗑</button>
   </div>
   <div class="swrow" id="swGrad"></div>
@@ -371,7 +372,8 @@
 
   // ---------------- State ----------------
   let padCount = 10;
-  let playMode = 'cutpress';
+  // 全体設定: poly=複数パッド同時再生 / mono=常に1音だけ(他を押すとカットイン)
+  let voiceMode = 'mono';
   let assignMode = false;
   let panelOpen = false;
   // 割当先として選択中のパッド。パッドをタップ → 📂 でファイルを選ぶ。
@@ -386,6 +388,7 @@
   let pages = [];               // pages[p] = { pads:[{name,buffer}], colors:['#hex' | '#hex|f'] }
   let pads = [];                // 現在のページの pads(参照)
   let padColors = [];           // 現在のページの colors(参照)
+  let padModes = [];            // 現在のページの modes(参照)
 
   // 15色 × (グラデ / 単色) = 30バリエーション
   const HUES = [
@@ -440,10 +443,32 @@
       .map(h => shade(h, 0.34))
   );
 
+  // パッドごとの再生モード
+  const PAD_MODES = [
+    ['press',         'タップで再生'],
+    ['release',       'リリースで再生'],
+    ['hold',          '押している間だけ再生'],
+    ['togglepress',   'タップ再生 / 再タップで停止'],
+    ['togglerelease', 'リリース再生 / 再リリースで停止'],
+    ['cutpress',      'タップでカットイン'],
+    ['cutrelease',    'リリースでカットイン'],
+    ['cutallpress',   'タップで全部カットイン'],
+    ['cutallrelease', 'リリースで全部カットイン']
+  ];
+  const MODE_TAGS = {
+    press:'TAP', release:'REL', hold:'HOLD',
+    togglepress:'TGL', togglerelease:'TGL-R',
+    cutpress:'CUT', cutrelease:'CUT-R',
+    cutallpress:'ALL', cutallrelease:'ALL-R'
+  };
+  const DEFAULT_MODE = 'press';
+  function modeOf(i){ return (padModes[i] && MODE_TAGS[padModes[i]]) ? padModes[i] : DEFAULT_MODE; }
+
   function makePage(){
     return {
       pads:   Array.from({length: padCount}, () => ({ name:null, buffer:null })),
-      colors: Array.from({length: padCount}, (_, i) => defaultColor(i))
+      colors: Array.from({length: padCount}, (_, i) => defaultColor(i)),
+      modes:  Array.from({length: padCount}, () => DEFAULT_MODE)
       // bg は ensurePages がページ番号ごとの既定を入れる
     };
   }
@@ -451,8 +476,10 @@
   function ensurePages(){
     while(pages.length < PAGE_COUNT) pages.push(makePage());
     pages.forEach((pg, i) => {
+      if(!Array.isArray(pg.modes)) pg.modes = [];
       while(pg.pads.length   < padCount) pg.pads.push({ name:null, buffer:null });
       while(pg.colors.length < padCount) pg.colors.push(defaultColor(pg.colors.length));
+      while(pg.modes.length  < padCount) pg.modes.push(DEFAULT_MODE);
       // 未設定なら「ページごとに違う背景」を既定にする
       if(typeof pg.bg !== 'number' || !BACKGROUNDS[pg.bg]) pg.bg = i % BACKGROUNDS.length;
     });
@@ -461,6 +488,7 @@
     page = ((p % PAGE_COUNT) + PAGE_COUNT) % PAGE_COUNT;
     pads = pages[page].pads;
     padColors = pages[page].colors;
+    padModes = pages[page].modes;
   }
   function pageHasSound(p){ return pages[p].pads.some(x => x.buffer); }
 
@@ -483,14 +511,12 @@
     el.title = (ctx && ctx.state === 'running') ? 'AUDIO READY' : 'TAP TO START AUDIO';
   }
 
-  // active poly voices per pad index (for hold-mode stop-on-release), keyed by pointerId
-  const heldVoices = new Map(); // pointerId -> {padIndex, source, gainNode}
-  // for cut-in exclusive voice
-  let cutVoice = null; // {source, gainNode, padIndex}
-  // pointer -> pad currently pressed (for cutrelease / general tracking)
-  const pointerPad = new Map();
+  // 鳴っているボイスの集合。{source, gainNode, padIndex, hold, toggle, cut}
+  const voices = new Set();
+  const holdByPointer = new Map();   // pointerId -> voice (HOLD用)
+  const pointerPad = new Map();      // pointerId -> padIndex (押下中のパッド)
 
-  function playBuffer(padIndex, exclusive){
+  function playBuffer(padIndex, tags){
     const p = pads[padIndex];
     if(!p || !p.buffer) return null;
     ensureCtx();
@@ -500,38 +526,89 @@
     g.gain.value = 1;
     src.connect(g);
     g.connect(master);
+    const v = Object.assign({ source:src, gainNode:g, padIndex, stopping:false }, tags || {});
+    src.onended = () => { voices.delete(v); refreshPadFlash(padIndex); };
     src.start(0);
-    flashPad(padIndex, true);
-    src.onended = () => {
-      if(!exclusive) flashPad(padIndex, false);
-    };
-    return { source: src, gainNode: g, padIndex };
+    voices.add(v);
+    refreshPadFlash(padIndex);
+    return v;
   }
 
-  function stopVoiceSmooth(voice, onDone){
-    if(!voice) { if(onDone) onDone(); return; }
+  function stopVoice(v){
+    if(!v || v.stopping) return;
+    v.stopping = true;
     const now = ctx.currentTime;
     try{
-      voice.gainNode.gain.cancelScheduledValues(now);
-      voice.gainNode.gain.setValueAtTime(voice.gainNode.gain.value, now);
-      voice.gainNode.gain.linearRampToValueAtTime(0, now + 0.015);
-      voice.source.stop(now + 0.02);
+      v.gainNode.gain.cancelScheduledValues(now);
+      v.gainNode.gain.setValueAtTime(v.gainNode.gain.value, now);
+      v.gainNode.gain.linearRampToValueAtTime(0, now + 0.015);
+      v.source.stop(now + 0.02);
     }catch(e){}
-    flashPad(voice.padIndex, false);
-    if(onDone) setTimeout(onDone, 20);
+    voices.delete(v);
+    refreshPadFlash(v.padIndex);
   }
 
-  function triggerCutIn(padIndex){
-    const prev = cutVoice;
-    const next = playBuffer(padIndex, true);
-    if(prev) stopVoiceSmooth(prev);
-    cutVoice = next;
+  function stopAllVoices(){
+    [...voices].forEach(stopVoice);
+    holdByPointer.clear();
+    pointerPad.clear();
   }
-
-  function flashPad(padIndex, on){
+  function stopPadVoices(idx){
+    [...voices].filter(v => v.padIndex === idx).forEach(stopVoice);
+  }
+  function padSounding(idx){
+    for(const v of voices) if(v.padIndex === idx) return true;
+    return false;
+  }
+  function refreshPadFlash(padIndex){
     const el = gridEl.children[padIndex];
-    if(!el) return;
-    if(on) el.classList.add('playing'); else el.classList.remove('playing');
+    if(el) el.classList.toggle('playing', padSounding(padIndex));
+  }
+
+  // 発音開始。MONO(単体)ならこの時点で他の音を全部止める
+  function startVoice(idx, tags){
+    if(voiceMode === 'mono') stopAllVoices();
+    return playBuffer(idx, tags);
+  }
+
+  // パッドごとのモードに沿って、押した/離した瞬間の動作を決める
+  function trigger(idx, phase, pointerId){
+    const m = modeOf(idx);
+    const onPress = phase === 'press';
+    switch(m){
+      case 'press':   if(onPress) startVoice(idx, {}); break;
+      case 'release': if(!onPress) startVoice(idx, {}); break;
+      case 'hold':
+        if(onPress){
+          const v = startVoice(idx, { hold:true });
+          if(v) holdByPointer.set(pointerId, v);
+        } else {
+          const v = holdByPointer.get(pointerId);
+          if(v){ stopVoice(v); holdByPointer.delete(pointerId); }
+        }
+        break;
+      // タップ(またはリリース)で再生、もう一度で停止
+      case 'togglepress':
+      case 'togglerelease':
+        if(onPress !== (m === 'togglepress')) break;
+        if(padSounding(idx)) stopPadVoices(idx);
+        else startVoice(idx, { toggle:true });
+        break;
+      // カットイン: 他のカットイン音だけを止めて差し替える
+      case 'cutpress':
+      case 'cutrelease':
+        if(onPress !== (m === 'cutpress')) break;
+        [...voices].filter(v => v.cut).forEach(stopVoice);
+        startVoice(idx, { cut:true });
+        break;
+      // 全カットイン: 鳴っている音をすべて止めて差し替える
+      case 'cutallpress':
+      case 'cutallrelease':
+        if(onPress !== (m === 'cutallpress')) break;
+        stopAllVoices();
+        startVoice(idx, {});
+        break;
+    }
   }
 
   // ---------------- UI: grid ----------------
@@ -568,7 +645,6 @@
       const el = document.createElement('div');
       const cv = colorOf(i);
       el.className = 'pad' + (p.buffer ? ' assigned' : ' empty')
-        + (playMode.startsWith('cut') ? ' cutmode' : '')
         + (isFlat(cv) ? ' flat' : '')
         + (faceIsLight(cv) ? ' lightface' : '')
         + (i === selectedIndex ? ' selected' : '');
@@ -578,7 +654,9 @@
       el.style.setProperty('--pc-lite', stops[0]);
       el.style.setProperty('--pc-mid', stops[1]);
       el.style.setProperty('--pc-a45', hexToRgba(hex, 0.45));
-      const tag = i === selectedIndex ? `<div class="padtag">選択中</div>` : '';
+      const tag = i === selectedIndex
+        ? `<div class="padtag">選択中</div>`
+        : (p.buffer ? `<div class="modetag">${MODE_TAGS[modeOf(i)]}</div>` : '');
       el.innerHTML = p.buffer
         ? `${tag}<div class="padnum">${i+1}</div><div class="padname">${escapeHtml(p.name)}</div>`
         : `${tag}<div class="padempty-icon">＋</div>`;
@@ -605,17 +683,7 @@
       }
       if(!p.buffer) return;
       pointerPad.set(e.pointerId, idx);
-
-      if(playMode === 'press'){
-        playBuffer(idx, false);
-      } else if(playMode === 'hold'){
-        const v = playBuffer(idx, false);
-        if(v) heldVoices.set(e.pointerId, v);
-      } else if(playMode === 'cutpress'){
-        triggerCutIn(idx);
-      } else if(playMode === 'release' || playMode === 'cutrelease'){
-        el.classList.add('pending');
-      }
+      trigger(idx, 'press', e.pointerId);
     }, {passive:false});
 
     const release = (e) => {
@@ -624,23 +692,13 @@
       pointerPad.delete(e.pointerId);
       const p = pads[idx2];
       if(!p || !p.buffer) return;
-
-      if(playMode === 'hold'){
-        const v = heldVoices.get(e.pointerId);
-        if(v){ stopVoiceSmooth(v); heldVoices.delete(e.pointerId); }
-      } else if(playMode === 'release'){
-        playBuffer(idx2, false);
-      } else if(playMode === 'cutrelease'){
-        triggerCutIn(idx2);
-      }
-      const elx = gridEl.children[idx2];
-      if(elx) elx.classList.remove('pending');
+      trigger(idx2, 'release', e.pointerId);
     };
     el.addEventListener('pointerup', release, {passive:false});
     el.addEventListener('pointercancel', release, {passive:false});
     el.addEventListener('pointerleave', (e) => {
-      // if using hold mode and finger slides off pad, stop it (natural hardware pad behavior)
-      if(playMode === 'hold'){ release(e); }
+      // HOLDのときだけ、指がパッドから外れたら止める(実機のパッドと同じ挙動)
+      if(modeOf(idx) === 'hold') release(e);
     });
   }
 
@@ -734,10 +792,26 @@
     });
   });
 
+  // パッドごとの再生モード
+  const padModeSel = document.getElementById('padModeSel');
+  PAD_MODES.forEach(([value, label]) => {
+    const o = document.createElement('option');
+    o.value = value; o.textContent = label;
+    padModeSel.appendChild(o);
+  });
+  padModeSel.addEventListener('change', () => {
+    if(selectedIndex === null) return;
+    padModes[selectedIndex] = padModeSel.value;
+    stopPadVoices(selectedIndex);
+    saveSettings();
+    renderGrid();
+  });
+
   function renderPadBar(){
     if(selectedIndex === null){ padbarEl.hidden = true; return; }
     padbarEl.hidden = false;
     padbarLabel.textContent = `P${page+1} · PAD ${String(selectedIndex+1).padStart(2,'0')}`;
+    padModeSel.value = modeOf(selectedIndex);
     const c = colorOf(selectedIndex);
     swatchRows.forEach(row => [...row.children].forEach(b => b.classList.toggle('on', b.dataset.color === c)));
   }
@@ -749,20 +823,6 @@
     pads[selectedIndex] = { name:null, buffer:null };
     renderGrid();
   });
-
-  function stopPadVoices(idx){
-    if(cutVoice && cutVoice.padIndex === idx){ stopVoiceSmooth(cutVoice); cutVoice = null; }
-    heldVoices.forEach((v, key) => {
-      if(v.padIndex === idx){ stopVoiceSmooth(v); heldVoices.delete(key); }
-    });
-  }
-
-  function stopAllVoices(){
-    if(cutVoice){ stopVoiceSmooth(cutVoice); cutVoice = null; }
-    heldVoices.forEach(v => stopVoiceSmooth(v));
-    heldVoices.clear();
-    pointerPad.clear();
-  }
 
   // ---------------- ページ切替(最下部のバー) ----------------
   // 演奏中でも狙わずに操作できるよう、バー全体を左右スワイプ + 大きな矢印にしている
@@ -888,11 +948,16 @@
     saveSettings();
   });
 
-  const playModeSel = document.getElementById('playMode');
-  playModeSel.addEventListener('change', () => {
-    playMode = playModeSel.value;
+  const voiceSeg = document.getElementById('voiceSeg');
+  function setVoiceMode(v){
+    voiceMode = (v === 'poly') ? 'poly' : 'mono';
+    [...voiceSeg.children].forEach(b => b.classList.toggle('active', b.dataset.v === voiceMode));
+  }
+  voiceSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if(!btn) return;
+    setVoiceMode(btn.dataset.v);
     stopAllVoices();
-    renderGrid();
     saveSettings();
   });
 
@@ -935,26 +1000,38 @@
   function saveSettings(){
     try{
       localStorage.setItem('padfeed_settings', JSON.stringify({
-        padCount, playMode, panelOpen, page,
+        padCount, voiceMode, panelOpen, page,
         pageColors: pages.map(pg => pg.colors),
+        pageModes:  pages.map(pg => pg.modes),
         pageBg:     pages.map(pg => pg.bg)
       }));
     }catch(e){}
   }
+  let legacyMode = null;   // 旧 playMode からの移行用
   function loadSettings(){
     try{
       const raw = localStorage.getItem('padfeed_settings');
       if(!raw) return;
       const s = JSON.parse(raw);
       if(s.padCount) padCount = s.padCount;
-      if(s.playMode) playMode = s.playMode;
+      if(s.voiceMode) voiceMode = s.voiceMode;
+      // 旧形式(全体で1つの playMode)からの移行
+      else if(s.playMode){
+        voiceMode = s.playMode.startsWith('cut') ? 'mono' : 'poly';
+        legacyMode = { cutpress:'press', cutrelease:'release' }[s.playMode] || s.playMode;
+      }
       if(typeof s.panelOpen === 'boolean') panelOpen = s.panelOpen;
       const isColorArray = a => Array.isArray(a) && a.every(c => typeof c === 'string');
       if(Array.isArray(s.pageColors)){
         pages = s.pageColors.filter(isColorArray).slice(0, PAGE_COUNT)
-                  .map(colors => ({ pads:[], colors: colors.slice() }));
+                  .map(colors => ({ pads:[], colors: colors.slice(), modes:[] }));
       } else if(isColorArray(s.padColors)){
-        pages = [{ pads:[], colors: s.padColors.slice() }];   // 旧形式(単一ページ)からの移行
+        pages = [{ pads:[], colors: s.padColors.slice(), modes:[] }];   // 旧形式(単一ページ)
+      }
+      if(Array.isArray(s.pageModes)){
+        s.pageModes.forEach((m, i) => { if(pages[i] && isColorArray(m)) pages[i].modes = m.slice(); });
+      } else if(legacyMode){
+        pages.forEach(pg => { pg.modes = new Array(padCount).fill(legacyMode); });
       }
       if(Array.isArray(s.pageBg) && s.pageBg.some(v => v)){
         s.pageBg.forEach((v, i) => { if(pages[i]) pages[i].bg = v; });
@@ -969,7 +1046,7 @@
   [...document.getElementById('padCountSeg').children].forEach(b => {
     b.classList.toggle('active', parseInt(b.dataset.n,10) === padCount);
   });
-  playModeSel.value = playMode;
+  setVoiceMode(voiceMode);
   setPanelOpen(panelOpen);
   setAssignMode(false);
 
