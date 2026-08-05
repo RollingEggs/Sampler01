@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>PADFEED — Web Sampler</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --chassis:#17140f;
+    --chassis-2:#1f1a14;
+    --panel:#241f18;
+    --pad:#2a2420;
+    --pad-border:#3d352b;
+    --pad-empty-border:#4a4239;
+    --amber:#ff8a34;
+    --amber-dim:#7a4318;
+    --teal:#33d6c0;
+    --teal-dim:#175f56;
+    --ink:#f1ead9;
+    --ink-dim:#9a9081;
+    --ink-faint:#605848;
+    --danger:#ff5c5c;
+    --radius:14px;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+    --sans:'IBM Plex Sans JP','Hiragino Kaku Gothic ProN',sans-serif;
+    color-scheme: dark;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+  html,body{
+    margin:0; height:100%;
+    background:
+      radial-gradient(ellipse at 20% -10%, #2a2117 0%, transparent 55%),
+      radial-gradient(ellipse at 100% 110%, #1c1712 0%, transparent 50%),
+      var(--chassis);
+    color:var(--ink);
+    font-family:var(--sans);
+    overscroll-behavior:none;
+    -webkit-user-select:none; user-select:none;
+  }
+  body{
+    display:flex; flex-direction:column;
+    min-height:100dvh;
+    padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+    gap:10px;
+  }
+
+  /* ---------- Header ---------- */
+  header{
+    display:flex; align-items:baseline; justify-content:space-between;
+    padding:2px 6px 0;
+  }
+  header .logo{
+    font-family:var(--mono); font-weight:700; font-size:15px; letter-spacing:0.14em;
+    color:var(--ink);
+  }
+  header .logo span{color:var(--amber);}
+  header .status{
+    font-family:var(--mono); font-size:10px; letter-spacing:0.08em; color:var(--ink-faint);
+  }
+  header .status.live{color:var(--teal);}
+
+  /* ---------- Control panel ---------- */
+  .panel{
+    background:linear-gradient(180deg,var(--panel),var(--chassis-2));
+    border:1px solid #362d21;
+    border-radius:var(--radius);
+    padding:10px;
+    display:flex; flex-direction:column; gap:8px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 6px 16px rgba(0,0,0,0.35);
+  }
+  .row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .label{
+    font-family:var(--mono); font-size:9px; letter-spacing:0.12em; color:var(--ink-faint);
+    text-transform:uppercase; min-width:52px;
+  }
+  .segmented{
+    display:flex; background:#171310; border-radius:9px; padding:2px; gap:2px;
+    border:1px solid #332c22; flex:1;
+  }
+  .segmented button{
+    flex:1; border:0; background:transparent; color:var(--ink-dim);
+    font-family:var(--mono); font-size:12px; font-weight:600; padding:7px 4px;
+    border-radius:7px; transition:background .12s, color .12s;
+  }
+  .segmented button.active{
+    background:linear-gradient(180deg,#3a3024,#2b241a); color:var(--amber);
+    box-shadow: inset 0 0 0 1px #4a3c28;
+  }
+  select.styled{
+    flex:1; background:#171310; color:var(--ink); border:1px solid #332c22;
+    font-family:var(--mono); font-size:12px; font-weight:600; padding:8px 6px;
+    border-radius:9px; -webkit-appearance:none; appearance:none;
+    background-image:linear-gradient(45deg, transparent 50%, var(--ink-faint) 50%), linear-gradient(135deg, var(--ink-faint) 50%, transparent 50%);
+    background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%;
+    background-size:5px 5px, 5px 5px; background-repeat:no-repeat;
+  }
+  .btn{
+    border:1px solid #332c22; background:#171310; color:var(--ink);
+    font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:.03em;
+    padding:8px 12px; border-radius:9px; white-space:nowrap;
+  }
+  .btn.accent{ color:var(--chassis); background:linear-gradient(180deg,#ffb066,var(--amber)); border-color:var(--amber); }
+  .btn.on{ color:var(--chassis); background:linear-gradient(180deg,#5cf0dc,var(--teal)); border-color:var(--teal); }
+  .btn:active{ filter:brightness(0.9); transform:translateY(1px); }
+  input[type=range]{
+    flex:1; accent-color:var(--amber); height:22px;
+  }
+  .hint{ font-family:var(--mono); font-size:9.5px; color:var(--ink-faint); line-height:1.5; padding:0 4px; }
+
+  /* ---------- Pad grid ---------- */
+  .stage{ flex:1; display:flex; min-height:0; }
+  #grid{
+    flex:1; display:grid; gap:9px; min-height:0;
+  }
+  .pad{
+    position:relative;
+    background:linear-gradient(160deg,#332b22,var(--pad) 55%,#211c17);
+    border:1px solid var(--pad-border);
+    border-radius:12px;
+    display:flex; flex-direction:column; justify-content:flex-end;
+    padding:8px 9px 7px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), inset 0 -6px 10px rgba(0,0,0,0.35), 0 3px 0 rgba(0,0,0,0.4);
+    overflow:hidden;
+    touch-action:none;
+    transition: transform .05s ease-out;
+  }
+  .pad::before{
+    content:''; position:absolute; inset:0; border-radius:12px;
+    background:radial-gradient(circle at 30% 20%, rgba(255,255,255,0.06), transparent 55%);
+  }
+  .pad.empty{
+    border-style:dashed; border-color:var(--pad-empty-border);
+    justify-content:center; align-items:center;
+  }
+  .pad.empty .padnum{ display:none; }
+  .pad .padnum{
+    position:absolute; top:7px; left:9px; font-family:var(--mono); font-size:10px; font-weight:600;
+    color:var(--ink-faint); letter-spacing:.05em;
+  }
+  .pad .padname{
+    font-family:var(--mono); font-size:11.5px; font-weight:600; color:var(--ink);
+    line-height:1.25; word-break:break-word; position:relative; z-index:1;
+    max-height:2.6em; overflow:hidden;
+  }
+  .pad .padempty-icon{ font-size:22px; color:var(--ink-faint); }
+  .pad .led{
+    position:absolute; top:8px; right:9px; width:8px; height:8px; border-radius:50%;
+    background:#3a2e1c; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.4);
+  }
+  .pad.assigned .led{ background:var(--amber-dim); }
+  .pad.playing{
+    transform:scale(0.96);
+    border-color:var(--amber);
+    box-shadow: 0 0 0 2px rgba(255,138,52,0.35), 0 0 22px rgba(255,138,52,0.45), inset 0 1px 0 rgba(255,255,255,0.08);
+  }
+  .pad.playing .led{ background:var(--amber); box-shadow:0 0 8px var(--amber); }
+  .pad.cutmode.playing{
+    border-color:var(--teal);
+    box-shadow: 0 0 0 2px rgba(51,214,192,0.35), 0 0 22px rgba(51,214,192,0.45);
+  }
+  .pad.cutmode.playing .led{ background:var(--teal); box-shadow:0 0 8px var(--teal); }
+  .pad.editing{ outline:2px dashed var(--teal); outline-offset:-2px; }
+
+  /* file input hidden */
+  input[type=file]{ display:none; }
+
+  footer{ text-align:center; padding-bottom:2px; }
+  footer .hint{ text-align:center; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">PAD<span>FEED</span></div>
+  <div class="status" id="audioStatus">TAP TO START AUDIO</div>
+</header>
+
+<div class="panel">
+  <div class="row">
+    <div class="label">PADS</div>
+    <div class="segmented" id="padCountSeg">
+      <button data-n="4">4</button>
+      <button data-n="6">6</button>
+      <button data-n="10" class="active">10</button>
+      <button data-n="15">15</button>
+    </div>
+  </div>
+  <div class="row">
+    <div class="label">MODE</div>
+    <select id="playMode" class="styled">
+      <option value="press">PRESS — 押したら再生(ポリ)</option>
+      <option value="release">RELEASE — 離したら再生(ポリ)</option>
+      <option value="hold">HOLD — 押している間だけ(ポリ)</option>
+      <option value="cutpress" selected>CUT IN (PRESS) — 押した瞬間に切替</option>
+      <option value="cutrelease">CUT IN (RELEASE) — 離した瞬間に切替</option>
+    </select>
+  </div>
+  <div class="row">
+    <div class="label">VOL</div>
+    <input type="range" id="vol" min="0" max="1" step="0.01" value="0.9">
+    <button class="btn" id="editBtn">✎ 割当</button>
+    <button class="btn accent" id="loadBtn">📂 音源を選択</button>
+  </div>
+  <div class="hint" id="modeHint"></div>
+</div>
+
+<div class="stage"><div id="grid"></div></div>
+
+<footer>
+  <div class="hint">iOSの仕様上フォルダの直接指定はできません。「音源を選択」で複数のwav/mp3をまとめて選び、空いているパッドへ自動で割り当てます。個別に差し替えたいときは「✎ 割当」をONにしてパッドをタップしてください。読み込んだ音は再読み込みすると消えるため、次回はまた選び直してください。</div>
+</footer>
+
+<input type="file" id="fileInputMulti" accept="audio/*" multiple>
+<input type="file" id="fileInputSingle" accept="audio/*">
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------------- State ----------------
+  let padCount = 10;
+  let playMode = 'cutpress';
+  let editMode = false;
+  let pendingEditIndex = null;
+
+  // pads[i] = { name, buffer, decoding }
+  let pads = [];
+
+  const modeHints = {
+    press:      "PRESS：パッドを押した瞬間に鳴ります。複数パッドの同時再生OK。",
+    release:    "RELEASE：パッドから指を離した瞬間に鳴ります。複数パッドの同時再生OK。",
+    hold:       "HOLD：押している間だけ鳴り、指を離すと止まります。複数パッドの同時再生OK。",
+    cutpress:   "CUT IN (PRESS)：1音だけが鳴る排他モード。別パッドを押すと今鳴っている音が即座に止まり、新しい音に切り替わります。",
+    cutrelease: "CUT IN (RELEASE)：CUT INの派生。別パッドから指を離した瞬間に、今鳴っている音が止まり新しい音に切り替わります。"
+  };
+
+  // ---------------- Audio engine ----------------
+  let ctx = null;
+  let master = null;
+  function ensureCtx(){
+    if(!ctx){
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      master = ctx.createGain();
+      master.gain.value = parseFloat(document.getElementById('vol').value);
+      master.connect(ctx.destination);
+    }
+    if(ctx.state === 'suspended'){ ctx.resume(); }
+    updateAudioStatus();
+  }
+  function updateAudioStatus(){
+    const el = document.getElementById('audioStatus');
+    if(ctx && ctx.state === 'running'){
+      el.textContent = 'AUDIO READY';
+      el.classList.add('live');
+    } else {
+      el.textContent = 'TAP TO START AUDIO';
+      el.classList.remove('live');
+    }
+  }
+
+  // active poly voices per pad index (for hold-mode stop-on-release), keyed by pointerId
+  const heldVoices = new Map(); // pointerId -> {padIndex, source, gainNode}
+  // for cut-in exclusive voice
+  let cutVoice = null; // {source, gainNode, padIndex}
+  // pointer -> pad currently pressed (for cutrelease / general tracking)
+  const pointerPad = new Map();
+
+  function playBuffer(padIndex, exclusive){
+    const p = pads[padIndex];
+    if(!p || !p.buffer) return null;
+    ensureCtx();
+    const src = ctx.createBufferSource();
+    src.buffer = p.buffer;
+    const g = ctx.createGain();
+    g.gain.value = 1;
+    src.connect(g);
+    g.connect(master);
+    src.start(0);
+    flashPad(padIndex, true);
+    src.onended = () => {
+      if(!exclusive) flashPad(padIndex, false);
+    };
+    return { source: src, gainNode: g, padIndex };
+  }
+
+  function stopVoiceSmooth(voice, onDone){
+    if(!voice) { if(onDone) onDone(); return; }
+    const now = ctx.currentTime;
+    try{
+      voice.gainNode.gain.cancelScheduledValues(now);
+      voice.gainNode.gain.setValueAtTime(voice.gainNode.gain.value, now);
+      voice.gainNode.gain.linearRampToValueAtTime(0, now + 0.015);
+      voice.source.stop(now + 0.02);
+    }catch(e){}
+    flashPad(voice.padIndex, false);
+    if(onDone) setTimeout(onDone, 20);
+  }
+
+  function triggerCutIn(padIndex){
+    const prev = cutVoice;
+    const next = playBuffer(padIndex, true);
+    if(prev) stopVoiceSmooth(prev);
+    cutVoice = next;
+  }
+
+  function flashPad(padIndex, on){
+    const el = gridEl.children[padIndex];
+    if(!el) return;
+    if(on) el.classList.add('playing'); else el.classList.remove('playing');
+  }
+
+  // ---------------- UI: grid ----------------
+  const gridEl = document.getElementById('grid');
+
+  function gridColsRows(n){
+    // returns {cols, rows} tuned for portrait iPhone screens
+    switch(n){
+      case 4: return {cols:2, rows:2};
+      case 6: return {cols:2, rows:3};
+      case 10: return {cols:2, rows:5};
+      case 15: return {cols:3, rows:5};
+      default: return {cols:2, rows:Math.ceil(n/2)};
+    }
+  }
+
+  function rebuildPads(newCount){
+    const old = pads;
+    pads = [];
+    for(let i=0;i<newCount;i++){
+      pads.push(old[i] || { name:null, buffer:null });
+    }
+    padCount = newCount;
+    renderGrid();
+  }
+
+  function renderGrid(){
+    const {cols, rows} = gridColsRows(padCount);
+    gridEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    gridEl.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+    gridEl.innerHTML = '';
+    for(let i=0;i<padCount;i++){
+      const p = pads[i];
+      const el = document.createElement('div');
+      el.className = 'pad' + (p.buffer ? ' assigned' : ' empty') + (playMode.startsWith('cut') ? ' cutmode' : '');
+      el.dataset.idx = i;
+      el.innerHTML = p.buffer
+        ? `<div class="led"></div><div class="padnum">PAD ${String(i+1).padStart(2,'0')}</div><div class="padname">${escapeHtml(p.name)}</div>`
+        : `<div class="padempty-icon">＋</div>`;
+      attachPadEvents(el, i);
+      gridEl.appendChild(el);
+    }
+  }
+
+  function escapeHtml(s){
+    return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ---------------- Pointer / trigger logic ----------------
+  function attachPadEvents(el, idx){
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      ensureCtx();
+      if(editMode){
+        openAssignFor(idx);
+        return;
+      }
+      const p = pads[idx];
+      if(!p.buffer) return;
+      pointerPad.set(e.pointerId, idx);
+
+      if(playMode === 'press'){
+        playBuffer(idx, false);
+      } else if(playMode === 'hold'){
+        const v = playBuffer(idx, false);
+        if(v) heldVoices.set(e.pointerId, v);
+      } else if(playMode === 'cutpress'){
+        triggerCutIn(idx);
+      } else if(playMode === 'release' || playMode === 'cutrelease'){
+        el.classList.add('pending');
+      }
+    }, {passive:false});
+
+    const release = (e) => {
+      const idx2 = pointerPad.get(e.pointerId);
+      if(idx2 === undefined) return;
+      pointerPad.delete(e.pointerId);
+      const p = pads[idx2];
+      if(!p || !p.buffer) return;
+
+      if(playMode === 'hold'){
+        const v = heldVoices.get(e.pointerId);
+        if(v){ stopVoiceSmooth(v); heldVoices.delete(e.pointerId); }
+      } else if(playMode === 'release'){
+        playBuffer(idx2, false);
+      } else if(playMode === 'cutrelease'){
+        triggerCutIn(idx2);
+      }
+      const elx = gridEl.children[idx2];
+      if(elx) elx.classList.remove('pending');
+    };
+    el.addEventListener('pointerup', release, {passive:false});
+    el.addEventListener('pointercancel', release, {passive:false});
+    el.addEventListener('pointerleave', (e) => {
+      // if using hold mode and finger slides off pad, stop it (natural hardware pad behavior)
+      if(playMode === 'hold'){ release(e); }
+    });
+  }
+
+  // ---------------- File assignment ----------------
+  const fileInputMulti = document.getElementById('fileInputMulti');
+  const fileInputSingle = document.getElementById('fileInputSingle');
+
+  document.getElementById('loadBtn').addEventListener('click', () => {
+    ensureCtx();
+    fileInputMulti.value = '';
+    fileInputMulti.click();
+  });
+
+  function openAssignFor(idx){
+    pendingEditIndex = idx;
+    fileInputSingle.value = '';
+    fileInputSingle.click();
+  }
+
+  fileInputSingle.addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if(!f || pendingEditIndex === null) return;
+    await assignFileToPad(pendingEditIndex, f);
+    pendingEditIndex = null;
+  });
+
+  fileInputMulti.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    if(!files.length) return;
+    let slot = 0;
+    for(const f of files){
+      while(slot < pads.length && pads[slot].buffer) slot++;
+      if(slot >= pads.length) break;
+      await assignFileToPad(slot, f);
+      slot++;
+    }
+    if(files.length > pads.filter(p=>p.buffer).length){
+      // some files didn't fit — just informational, non-blocking
+    }
+  });
+
+  async function assignFileToPad(idx, file){
+    ensureCtx();
+    const el = gridEl.children[idx];
+    if(el){ el.querySelector('.padname') && (el.querySelector('.padname').textContent = '読込中…'); }
+    try{
+      const arrayBuf = await file.arrayBuffer();
+      const audioBuf = await ctx.decodeAudioData(arrayBuf.slice(0));
+      pads[idx] = { name: file.name.replace(/\.(wav|mp3|m4a|aac|ogg)$/i,''), buffer: audioBuf };
+    }catch(err){
+      pads[idx] = { name: '読込失敗: '+file.name, buffer: null };
+    }
+    renderGrid();
+  }
+
+  // ---------------- Controls ----------------
+  document.getElementById('padCountSeg').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if(!btn) return;
+    [...e.currentTarget.children].forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    rebuildPads(parseInt(btn.dataset.n, 10));
+    saveSettings();
+  });
+
+  const playModeSel = document.getElementById('playMode');
+  playModeSel.addEventListener('change', () => {
+    playMode = playModeSel.value;
+    document.getElementById('modeHint').textContent = modeHints[playMode];
+    // reset transient states
+    heldVoices.forEach(v => stopVoiceSmooth(v));
+    heldVoices.clear();
+    if(cutVoice){ stopVoiceSmooth(cutVoice); cutVoice = null; }
+    renderGrid();
+    saveSettings();
+  });
+
+  document.getElementById('vol').addEventListener('input', (e) => {
+    if(master) master.gain.value = parseFloat(e.target.value);
+  });
+
+  const editBtn = document.getElementById('editBtn');
+  editBtn.addEventListener('click', () => {
+    editMode = !editMode;
+    editBtn.classList.toggle('on', editMode);
+    editBtn.textContent = editMode ? '✎ 割当中…' : '✎ 割当';
+  });
+
+  // ---------------- Settings persistence (layout only, not audio) ----------------
+  function saveSettings(){
+    try{
+      localStorage.setItem('padfeed_settings', JSON.stringify({ padCount, playMode }));
+    }catch(e){}
+  }
+  function loadSettings(){
+    try{
+      const raw = localStorage.getItem('padfeed_settings');
+      if(!raw) return;
+      const s = JSON.parse(raw);
+      if(s.padCount) padCount = s.padCount;
+      if(s.playMode) playMode = s.playMode;
+    }catch(e){}
+  }
+
+  // ---------------- Init ----------------
+  loadSettings();
+  // sync UI to loaded settings
+  [...document.getElementById('padCountSeg').children].forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.n,10) === padCount);
+  });
+  playModeSel.value = playMode;
+  document.getElementById('modeHint').textContent = modeHints[playMode];
+
+  for(let i=0;i<padCount;i++) pads.push({ name:null, buffer:null });
+  renderGrid();
+
+  document.body.addEventListener('pointerdown', ensureCtx, {once:false});
+
+  window.addEventListener('resize', () => {
+    // no-op; CSS grid handles reflow, dvh handles iOS toolbar resize
+  });
+})();
+</script>
+</body>
+</html>
