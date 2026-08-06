@@ -53,8 +53,9 @@
     gap:8px; padding:0 4px;
   }
   header .logo{
-    font-family:var(--mono); font-weight:700; font-size:12px; letter-spacing:0.14em;
-    color:var(--ink-dim); display:flex; align-items:center; gap:7px;
+    font-family:var(--mono); font-weight:700; font-size:12px; letter-spacing:0.1em;
+    color:var(--ink-dim); display:flex; align-items:center; gap:6px;
+    min-width:0; overflow:hidden;
   }
   header .logo span{color:var(--amber);}
   /* ページごとの背景(最背面。ページ切替でクロスフェードする) */
@@ -62,6 +63,10 @@
     position:fixed; inset:0; z-index:-1; pointer-events:none;
     transition:background .28s ease-out;
   }
+  header .logo .logotext{ color:var(--ink-dim); white-space:nowrap; }
+  /* 狭い画面ではロゴを畳んで、ページ番号とボタンを優先する */
+  @media (max-width:389px){ .logotext{ display:none; } }
+  header .logo .pagechip{ flex:none; }
   header .logo .pagechip{
     font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.06em;
     color:var(--chassis); background:linear-gradient(180deg,#ffb066,var(--amber));
@@ -71,13 +76,14 @@
     width:6px; height:6px; border-radius:50%; background:#3a2e1c; flex:none;
   }
   .dot.live{ background:var(--teal); box-shadow:0 0 6px var(--teal); }
-  .hdr-actions{ display:flex; gap:6px; }
+  .hdr-actions{ display:flex; gap:5px; flex:none; }
   .chip{
     border:1px solid #332c22; background:#171310; color:var(--ink-dim);
-    font-family:var(--mono); font-size:12px; font-weight:600;
-    height:30px; min-width:36px; padding:0 9px; border-radius:9px;
-    display:flex; align-items:center; justify-content:center; gap:4px;
+    font-family:var(--mono); font-size:11px; font-weight:600; white-space:nowrap;
+    height:30px; min-width:34px; padding:0 7px; border-radius:9px;
+    display:flex; align-items:center; justify-content:center; gap:3px;
   }
+  .chip.warm{ color:var(--chassis); background:linear-gradient(180deg,#ffb066,var(--amber)); border-color:var(--amber); }
   .chip.on{ color:var(--chassis); background:linear-gradient(180deg,#5cf0dc,var(--teal)); border-color:var(--teal); }
   .chip:active{ filter:brightness(0.9); }
 
@@ -259,6 +265,41 @@
   .swatch.on{ box-shadow:0 0 0 2px var(--ink); }
   .chip.danger{ color:var(--danger); border-color:#5a2b2b; }
 
+  /* ---------- アレンジ(音量 / EQ)パネル ---------- */
+  #arrangebar{
+    display:flex; flex-direction:column; gap:6px;
+    background:linear-gradient(180deg,var(--panel),var(--chassis-2));
+    border:1px solid #4a3c28; border-radius:var(--radius);
+    padding:7px 9px 9px;
+    box-shadow:0 8px 20px rgba(0,0,0,0.45);
+  }
+  #arrangebar[hidden]{ display:none; }
+  #arrangeLabel{ color:var(--amber); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .faders{ display:flex; gap:6px; }
+  .fader{ flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; gap:3px; }
+  .fader .slot{
+    height:104px; width:100%; display:flex; align-items:center; justify-content:center;
+    background:#141110; border:1px solid #332c22; border-radius:9px;
+  }
+  /* 縦フェーダー: 横のレンジを回転させる(iOS でも確実に動く書き方) */
+  .fader input[type=range]{
+    width:96px; height:22px; flex:none; transform:rotate(-90deg);
+  }
+  .fader .fadname{
+    font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:.1em; color:var(--ink-faint);
+  }
+  .fader .fadval{
+    font-family:var(--mono); font-size:10px; font-weight:700; color:var(--ink);
+  }
+
+  /* アレンジ中はパッドを縦スクロールできるようにする(パネルの下に隠れた分を出す) */
+  body.arrange .pageview{ overflow-y:auto; -webkit-overflow-scrolling:touch; }
+  body.arrange #grid{
+    grid-template-rows:none !important;
+    grid-auto-rows:96px; align-content:start;
+  }
+  body.arrange .pad{ touch-action:pan-y; }
+
   /* ---------- 背景プリセット(⚙パネル内・表示中ページに適用) ---------- */
   #bgRow{ display:flex; gap:4px; flex:1; }
   .bgsw{
@@ -306,8 +347,9 @@
 <div id="bg"></div>
 
 <header>
-  <div class="logo"><span class="dot" id="audioDot"></span>PAD<span>FEED</span><span class="pagechip" id="pageChip">P1</span></div>
+  <div class="logo"><span class="dot" id="audioDot"></span><span class="logotext">PAD<span>FEED</span></span><span class="pagechip" id="pageChip">P1</span></div>
   <div class="hdr-actions">
+    <button class="chip" id="arrangeBtn" aria-pressed="false">アレンジ</button>
     <button class="chip" id="assignBtn" aria-pressed="false">✎ 割当</button>
     <button class="chip" id="fileBtn">📂 ファイル</button>
     <button class="chip" id="panelBtn" aria-expanded="false" aria-controls="panel">⚙</button>
@@ -340,6 +382,14 @@
     <div class="label">BG</div>
     <div id="bgRow"></div>
   </div>
+</div>
+
+<div id="arrangebar" hidden>
+  <div class="pbrow">
+    <div class="pblabel" id="arrangeLabel">パッドを押してください</div>
+    <button class="chip" id="fxResetBtn">リセット</button>
+  </div>
+  <div class="faders" id="faders"></div>
 </div>
 
 <div id="padbar" hidden>
@@ -396,6 +446,7 @@
   let padColors = [];           // 現在のページの colors(参照)
   let padModes = [];            // 現在のページの modes(参照)
   let padVels = [];             // 現在のページの vels(参照)
+  let padFx = [];               // 現在のページの fx(参照)
 
   // 15色 × (グラデ / 単色) = 30バリエーション
   const HUES = [
@@ -490,12 +541,22 @@
   const DEFAULT_VEL = 'off';
   function velOf(i){ return VEL_CURVES[padVels[i]] ? padVels[i] : DEFAULT_VEL; }
 
+  // パッドごとの音量と3バンドEQ(dB)
+  const FX_DEFAULT = { vol:1, bass:0, mid:0, treble:0 };
+  const EQ_RANGE = 15;          // ±15dB
+  function makeFx(){ return Object.assign({}, FX_DEFAULT); }
+  function fxOf(i){
+    if(!padFx[i]) padFx[i] = makeFx();
+    return padFx[i];
+  }
+
   function makePage(){
     return {
       pads:   Array.from({length: padCount}, () => ({ name:null, buffer:null })),
       colors: Array.from({length: padCount}, (_, i) => defaultColor(i)),
       modes:  Array.from({length: padCount}, () => DEFAULT_MODE),
-      vels:   Array.from({length: padCount}, () => DEFAULT_VEL)
+      vels:   Array.from({length: padCount}, () => DEFAULT_VEL),
+      fx:     Array.from({length: padCount}, () => makeFx())
       // bg は ensurePages がページ番号ごとの既定を入れる
     };
   }
@@ -505,10 +566,12 @@
     pages.forEach((pg, i) => {
       if(!Array.isArray(pg.modes)) pg.modes = [];
       if(!Array.isArray(pg.vels))  pg.vels  = [];
+      if(!Array.isArray(pg.fx))    pg.fx    = [];
       while(pg.pads.length   < padCount) pg.pads.push({ name:null, buffer:null });
       while(pg.colors.length < padCount) pg.colors.push(defaultColor(pg.colors.length));
       while(pg.modes.length  < padCount) pg.modes.push(DEFAULT_MODE);
       while(pg.vels.length   < padCount) pg.vels.push(DEFAULT_VEL);
+      while(pg.fx.length     < padCount) pg.fx.push(makeFx());
       // 未設定なら「ページごとに違う背景」を既定にする
       if(typeof pg.bg !== 'number' || !BACKGROUNDS[pg.bg]) pg.bg = i % BACKGROUNDS.length;
     });
@@ -519,6 +582,7 @@
     padColors = pages[page].colors;
     padModes = pages[page].modes;
     padVels = pages[page].vels;
+    padFx = pages[page].fx;
   }
   function pageHasSound(p){ return pages[p].pads.some(x => x.buffer); }
 
@@ -615,6 +679,33 @@
   const holdByPointer = new Map();   // pointerId -> voice (HOLD用)
   const pointerPad = new Map();      // pointerId -> padIndex (押下中のパッド)
 
+  // パッドごとの EQ + 音量チェーン(ノードは使い回し、値だけ差し替える)
+  const padChains = [];
+  function getChain(idx){
+    ensureCtx();
+    let c = padChains[idx];
+    if(!c){
+      const low  = ctx.createBiquadFilter(); low.type  = 'lowshelf';  low.frequency.value  = 200;
+      const mid  = ctx.createBiquadFilter(); mid.type  = 'peaking';   mid.frequency.value  = 1000; mid.Q.value = 1;
+      const high = ctx.createBiquadFilter(); high.type = 'highshelf'; high.frequency.value = 4000;
+      const gain = ctx.createGain();
+      low.connect(mid); mid.connect(high); high.connect(gain); gain.connect(master);
+      c = padChains[idx] = { low, mid, high, gain };
+    }
+    applyFx(idx);
+    return c;
+  }
+  function applyFx(idx){
+    const c = padChains[idx];
+    if(!c) return;
+    const f = fxOf(idx);
+    c.low.gain.value  = f.bass;
+    c.mid.gain.value  = f.mid;
+    c.high.gain.value = f.treble;
+    c.gain.gain.value = f.vol;
+  }
+  function applyAllFx(){ padChains.forEach((c, i) => { if(c) applyFx(i); }); }
+
   function playBuffer(padIndex, tags, gain){
     const p = pads[padIndex];
     if(!p || !p.buffer) return null;
@@ -624,7 +715,7 @@
     const g = ctx.createGain();
     g.gain.value = (typeof gain === 'number') ? gain : 1;
     src.connect(g);
-    g.connect(master);
+    g.connect(getChain(padIndex).low);
     const v = Object.assign({ source:src, gainNode:g, padIndex, stopping:false }, tags || {});
     src.onended = () => { voices.delete(v); refreshPadFlash(padIndex); };
     src.start(0);
@@ -748,7 +839,9 @@
     padCount = newCount;
     ensurePages();
     usePage(page);
+    applyAllFx();
     if(selectedIndex !== null && selectedIndex >= newCount) selectedIndex = null;
+    if(arrangeIndex !== null && arrangeIndex >= newCount){ arrangeIndex = null; renderArrangeBar(); }
     stopAllVoices();
     renderGrid();
   }
@@ -799,6 +892,7 @@
         selectPad(idx);
         return;
       }
+      if(arrangeMode) setArrangeTarget(idx);
       if(!p.buffer) return;
       pointerPad.set(e.pointerId, idx);
       captureStrength(e);
@@ -1048,6 +1142,9 @@
     stopAllVoices();          // ページが変わるとパッドの中身も変わるので鳴らしっぱなしを防ぐ
     selectedIndex = null;
     usePage(raw);
+    applyAllFx();
+    arrangeIndex = null;
+    renderArrangeBar();
     renderGrid();
     renderPageBar();
     applyBackground();
@@ -1119,6 +1216,101 @@
     renderPageBar();
   });
 
+  // ---------------- アレンジ(音量 / EQ)モード ----------------
+  // 音を鳴らしながら調整できるよう、押したパッドの設定がそのままパネルに出る
+  const arrangeBtn = document.getElementById('arrangeBtn');
+  const arrangeBar = document.getElementById('arrangebar');
+  const arrangeLabel = document.getElementById('arrangeLabel');
+  const fadersEl = document.getElementById('faders');
+  let arrangeMode = false;
+  let arrangeIndex = null;
+
+  const FADERS = [
+    { key:'vol',    name:'VOL',    min:0,          max:2,        step:0.01 },
+    { key:'bass',   name:'BASS',   min:-EQ_RANGE,  max:EQ_RANGE, step:0.5 },
+    { key:'mid',    name:'MID',    min:-EQ_RANGE,  max:EQ_RANGE, step:0.5 },
+    { key:'treble', name:'TREBLE', min:-EQ_RANGE,  max:EQ_RANGE, step:0.5 }
+  ];
+  const faderInputs = {};
+  const faderValues = {};
+
+  FADERS.forEach(f => {
+    const wrap = document.createElement('div');
+    wrap.className = 'fader';
+    const slot = document.createElement('div');
+    slot.className = 'slot';
+    const input = document.createElement('input');
+    input.type = 'range'; input.min = f.min; input.max = f.max; input.step = f.step;
+    input.setAttribute('aria-label', f.name);
+    const name = document.createElement('div'); name.className = 'fadname'; name.textContent = f.name;
+    const val  = document.createElement('div'); val.className  = 'fadval';
+    slot.appendChild(input); wrap.appendChild(slot); wrap.appendChild(name); wrap.appendChild(val);
+    fadersEl.appendChild(wrap);
+    faderInputs[f.key] = input;
+    faderValues[f.key] = val;
+    input.addEventListener('input', () => {
+      if(arrangeIndex === null) return;
+      fxOf(arrangeIndex)[f.key] = parseFloat(input.value);
+      applyFx(arrangeIndex);          // 鳴っている音にも即反映される
+      renderFaderValues();
+      saveSoon();
+    });
+  });
+
+  function fmtFader(key, v){
+    if(key === 'vol') return Math.round(v * 100) + '%';
+    return (v > 0 ? '+' : '') + v.toFixed(1);
+  }
+  function renderFaderValues(){
+    const f = arrangeIndex === null ? FX_DEFAULT : fxOf(arrangeIndex);
+    FADERS.forEach(d => { faderValues[d.key].textContent = fmtFader(d.key, f[d.key]); });
+  }
+  function renderArrangeBar(){
+    arrangeBar.hidden = !arrangeMode;
+    if(!arrangeMode) return;
+    const disabled = arrangeIndex === null;
+    FADERS.forEach(d => {
+      const f = disabled ? FX_DEFAULT : fxOf(arrangeIndex);
+      faderInputs[d.key].value = f[d.key];
+      faderInputs[d.key].disabled = disabled;
+    });
+    arrangeLabel.textContent = disabled
+      ? 'パッドを押してください'
+      : `PAD ${String(arrangeIndex+1).padStart(2,'0')}  ${pads[arrangeIndex].name || '(音なし)'}`;
+    renderFaderValues();
+  }
+  function setArrangeTarget(idx){
+    arrangeIndex = idx;
+    renderArrangeBar();
+  }
+  function setArrangeMode(on){
+    arrangeMode = on;
+    arrangeBtn.classList.toggle('warm', on);
+    arrangeBtn.setAttribute('aria-pressed', String(on));
+    document.body.classList.toggle('arrange', on);
+    if(!on) arrangeIndex = null;
+    renderArrangeBar();
+  }
+  arrangeBtn.addEventListener('click', () => {
+    const on = !arrangeMode;
+    if(on) setAssignMode(false);      // 割当とは同時に使わない
+    setArrangeMode(on);
+  });
+
+  document.getElementById('fxResetBtn').addEventListener('click', () => {
+    if(arrangeIndex === null) return;
+    padFx[arrangeIndex] = makeFx();
+    applyFx(arrangeIndex);
+    renderArrangeBar();
+    saveSettings();
+  });
+
+  let saveTimer = null;
+  function saveSoon(){
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveSettings, 350);
+  }
+
   // 割当モード: ONの間はパッドをタップするとファイル選択が開く
   const assignBtn = document.getElementById('assignBtn');
   function setAssignMode(on){
@@ -1128,7 +1320,11 @@
     document.body.classList.toggle('assign', on);
     if(!on) clearSelection();
   }
-  assignBtn.addEventListener('click', () => setAssignMode(!assignMode));
+  assignBtn.addEventListener('click', () => {
+    const on = !assignMode;
+    if(on) setArrangeMode(false);     // アレンジとは同時に使わない
+    setAssignMode(on);
+  });
 
   // コントロールパネルの折りたたみ
   const panelEl = document.getElementById('panel');
@@ -1149,6 +1345,7 @@
         pageColors: pages.map(pg => pg.colors),
         pageModes:  pages.map(pg => pg.modes),
         pageVels:   pages.map(pg => pg.vels),
+        pageFx:     pages.map(pg => pg.fx),
         pageBg:     pages.map(pg => pg.bg)
       }));
     }catch(e){}
@@ -1170,9 +1367,15 @@
       const isColorArray = a => Array.isArray(a) && a.every(c => typeof c === 'string');
       if(Array.isArray(s.pageColors)){
         pages = s.pageColors.filter(isColorArray).slice(0, PAGE_COUNT)
-                  .map(colors => ({ pads:[], colors: colors.slice(), modes:[], vels:[] }));
+                  .map(colors => ({ pads:[], colors: colors.slice(), modes:[], vels:[], fx:[] }));
       } else if(isColorArray(s.padColors)){
-        pages = [{ pads:[], colors: s.padColors.slice(), modes:[], vels:[] }];  // 旧形式(単一ページ)
+        pages = [{ pads:[], colors: s.padColors.slice(), modes:[], vels:[], fx:[] }];  // 旧形式(単一ページ)
+      }
+      if(Array.isArray(s.pageFx)){
+        s.pageFx.forEach((arr, i) => {
+          if(!pages[i] || !Array.isArray(arr)) return;
+          pages[i].fx = arr.map(o => Object.assign(makeFx(), o && typeof o === 'object' ? o : null));
+        });
       }
       if(Array.isArray(s.pageVels)){
         s.pageVels.forEach((v, i) => { if(pages[i] && isColorArray(v)) pages[i].vels = v.slice(); });
@@ -1198,6 +1401,7 @@
   setVoiceMode(voiceMode);
   setPanelOpen(panelOpen);
   setAssignMode(false);
+  setArrangeMode(false);
 
   ensurePages();
   usePage(page);
