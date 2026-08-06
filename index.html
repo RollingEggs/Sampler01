@@ -277,14 +277,29 @@
   #arrangeLabel{ color:var(--amber); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .faders{ display:flex; gap:6px; }
   .fader{ flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; gap:3px; }
+  /* 枠内を指で上下になぞるフェーダー(つまみを掴む必要がない) */
   .fader .slot{
-    height:104px; width:100%; display:flex; align-items:center; justify-content:center;
-    background:#141110; border:1px solid #332c22; border-radius:9px;
+    position:relative; height:124px; width:100%; overflow:hidden;
+    background:linear-gradient(180deg,#131010,#1b1613);
+    border:1px solid #332c22; border-radius:10px;
+    touch-action:none;
   }
-  /* 縦フェーダー: 横のレンジを回転させる(iOS でも確実に動く書き方) */
-  .fader input[type=range]{
-    width:96px; height:22px; flex:none; transform:rotate(-90deg);
+  .fader .fill{
+    position:absolute; left:3px; right:3px; bottom:0;
+    background:linear-gradient(180deg, #ffb066, var(--amber));
+    border-radius:5px;
   }
+  .fader .marker{
+    position:absolute; left:0; right:0; height:4px; border-radius:2px;
+    background:var(--ink); box-shadow:0 0 6px rgba(255,255,255,0.35);
+  }
+  .fader .zeroline{
+    position:absolute; left:5px; right:5px; top:50%; height:1px;
+    background:#4a4239;
+  }
+  .fader .slot.drag{ border-color:var(--amber); box-shadow:0 0 0 2px rgba(255,138,52,0.35); }
+  .fader .slot.drag .fill{ filter:brightness(1.15); }
+  #arrangebar.off .slot{ opacity:0.35; }
   .fader .fadname{
     font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:.1em; color:var(--ink-faint);
   }
@@ -1226,58 +1241,99 @@
   let arrangeIndex = null;
 
   const FADERS = [
-    { key:'vol',    name:'VOL',    min:0,          max:2,        step:0.01 },
-    { key:'bass',   name:'BASS',   min:-EQ_RANGE,  max:EQ_RANGE, step:0.5 },
-    { key:'mid',    name:'MID',    min:-EQ_RANGE,  max:EQ_RANGE, step:0.5 },
-    { key:'treble', name:'TREBLE', min:-EQ_RANGE,  max:EQ_RANGE, step:0.5 }
+    { key:'vol',    name:'VOL',    min:0,         max:2,        step:0.01, bipolar:false },
+    { key:'bass',   name:'BASS',   min:-EQ_RANGE, max:EQ_RANGE, step:0.5,  bipolar:true },
+    { key:'mid',    name:'MID',    min:-EQ_RANGE, max:EQ_RANGE, step:0.5,  bipolar:true },
+    { key:'treble', name:'TREBLE', min:-EQ_RANGE, max:EQ_RANGE, step:0.5,  bipolar:true }
   ];
-  const faderInputs = {};
-  const faderValues = {};
+  const faderEls = {};
 
   FADERS.forEach(f => {
     const wrap = document.createElement('div');
     wrap.className = 'fader';
     const slot = document.createElement('div');
     slot.className = 'slot';
-    const input = document.createElement('input');
-    input.type = 'range'; input.min = f.min; input.max = f.max; input.step = f.step;
-    input.setAttribute('aria-label', f.name);
+    slot.setAttribute('role', 'slider');
+    slot.setAttribute('aria-label', f.name);
+    const fill = document.createElement('div');   fill.className = 'fill';
+    const marker = document.createElement('div'); marker.className = 'marker';
+    if(f.bipolar){
+      const z = document.createElement('div'); z.className = 'zeroline';
+      slot.appendChild(z);
+    }
+    slot.appendChild(fill); slot.appendChild(marker);
     const name = document.createElement('div'); name.className = 'fadname'; name.textContent = f.name;
     const val  = document.createElement('div'); val.className  = 'fadval';
-    slot.appendChild(input); wrap.appendChild(slot); wrap.appendChild(name); wrap.appendChild(val);
+    wrap.appendChild(slot); wrap.appendChild(name); wrap.appendChild(val);
     fadersEl.appendChild(wrap);
-    faderInputs[f.key] = input;
-    faderValues[f.key] = val;
-    input.addEventListener('input', () => {
+    faderEls[f.key] = { slot, fill, marker, val };
+
+    // 枠のどこを触っても、その高さの値になる。そのまま指を上下すれば追従する。
+    const setFromY = (e) => {
       if(arrangeIndex === null) return;
-      fxOf(arrangeIndex)[f.key] = parseFloat(input.value);
-      applyFx(arrangeIndex);          // 鳴っている音にも即反映される
-      renderFaderValues();
+      const r = slot.getBoundingClientRect();
+      const t = Math.min(1, Math.max(0, (r.bottom - e.clientY) / r.height));
+      let v = f.min + t * (f.max - f.min);
+      if(f.bipolar){ if(Math.abs(v) < 1.2) v = 0; }        // EQは0付近で吸着
+      else if(Math.abs(v - 1) < 0.07) v = 1;               // 音量は100%で吸着
+      v = Math.round(v / f.step) * f.step;
+      fxOf(arrangeIndex)[f.key] = v;
+      applyFx(arrangeIndex);            // 鳴っている音にも即反映される
+      renderFader(f.key);
       saveSoon();
-    });
+    };
+    let dragging = false;
+    slot.addEventListener('pointerdown', (e) => {
+      if(arrangeIndex === null) return;
+      e.preventDefault();
+      dragging = true;
+      slot.classList.add('drag');
+      try{ slot.setPointerCapture(e.pointerId); }catch(err){}
+      setFromY(e);
+    }, {passive:false});
+    slot.addEventListener('pointermove', (e) => {
+      if(!dragging) return;
+      e.preventDefault();
+      setFromY(e);
+    }, {passive:false});
+    const end = () => { dragging = false; slot.classList.remove('drag'); };
+    slot.addEventListener('pointerup', end);
+    slot.addEventListener('pointercancel', end);
   });
 
   function fmtFader(key, v){
     if(key === 'vol') return Math.round(v * 100) + '%';
     return (v > 0 ? '+' : '') + v.toFixed(1);
   }
-  function renderFaderValues(){
-    const f = arrangeIndex === null ? FX_DEFAULT : fxOf(arrangeIndex);
-    FADERS.forEach(d => { faderValues[d.key].textContent = fmtFader(d.key, f[d.key]); });
+  function renderFader(key){
+    const f = FADERS.find(x => x.key === key);
+    const el = faderEls[key];
+    const v = (arrangeIndex === null ? FX_DEFAULT : fxOf(arrangeIndex))[key];
+    const t = (v - f.min) / (f.max - f.min);
+    el.marker.style.bottom = `calc(${(t * 100).toFixed(2)}% - 2px)`;
+    if(f.bipolar){
+      const h = (Math.abs(v) / f.max * 50).toFixed(2) + '%';
+      if(v >= 0){ el.fill.style.top = 'auto'; el.fill.style.bottom = '50%'; }
+      else      { el.fill.style.bottom = 'auto'; el.fill.style.top = '50%'; }
+      el.fill.style.height = h;
+    } else {
+      el.fill.style.top = 'auto'; el.fill.style.bottom = '0';
+      el.fill.style.height = (t * 100).toFixed(2) + '%';
+    }
+    el.val.textContent = fmtFader(key, v);
+    el.slot.setAttribute('aria-valuenow', String(v));
   }
+  function renderAllFaders(){ FADERS.forEach(f => renderFader(f.key)); }
+
   function renderArrangeBar(){
     arrangeBar.hidden = !arrangeMode;
     if(!arrangeMode) return;
     const disabled = arrangeIndex === null;
-    FADERS.forEach(d => {
-      const f = disabled ? FX_DEFAULT : fxOf(arrangeIndex);
-      faderInputs[d.key].value = f[d.key];
-      faderInputs[d.key].disabled = disabled;
-    });
+    arrangeBar.classList.toggle('off', disabled);
     arrangeLabel.textContent = disabled
       ? 'パッドを押してください'
       : `PAD ${String(arrangeIndex+1).padStart(2,'0')}  ${pads[arrangeIndex].name || '(音なし)'}`;
-    renderFaderValues();
+    renderAllFaders();
   }
   function setArrangeTarget(idx){
     arrangeIndex = idx;
