@@ -195,11 +195,13 @@
     position:absolute; top:6px; left:9px; font-family:var(--mono); font-size:13px; font-weight:700;
     color:var(--ink-faint); letter-spacing:.02em; z-index:1;
   }
+  /* サイズと行数はパッドの実寸から JS が決める(--padname-*) */
   .pad .padname{
-    font-family:var(--sans); font-size:17px; font-weight:700; color:var(--ink);
-    line-height:1.2; word-break:break-word; text-align:center; width:100%;
+    font-family:var(--sans); font-size:var(--padname-size, 34px); font-weight:700; color:var(--ink);
+    line-height:1.12; word-break:break-word; text-align:center; width:100%;
     position:relative; z-index:1;
-    display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
+    display:-webkit-box; -webkit-line-clamp:var(--padname-lines, 2); -webkit-box-orient:vertical;
+    overflow:hidden;
   }
   /* 濃い面では白文字、明るい面では黒文字(面の明度から自動で決める) */
   .pad.assigned .padnum{ color:rgba(255,255,255,0.8); text-shadow:0 1px 2px rgba(0,0,0,0.3); }
@@ -893,6 +895,21 @@
       gridEl.appendChild(el);
     }
     renderPadBar();
+    fitPadText();
+  }
+
+  // パッドの実寸から音源名の文字サイズと行数を決める。
+  // 2列(4/6/10パッド)なら最大34px、3列(15パッド)やアレンジ中の低い行では自動で縮む。
+  function fitPadText(){
+    const el = gridEl.children[0];
+    if(!el) return;
+    const h = el.clientHeight - 16;   // 上下パディング
+    const w = el.clientWidth - 20;    // 左右パディング
+    if(h <= 0 || w <= 0) return;
+    const size = Math.max(14, Math.round(Math.min(34, h * 0.42, w * 0.30)));
+    const lines = Math.max(1, Math.min(3, Math.floor(h / (size * 1.15))));
+    gridEl.style.setProperty('--padname-size', size + 'px');
+    gridEl.style.setProperty('--padname-lines', String(lines));
   }
 
   function escapeHtml(s){
@@ -1467,6 +1484,7 @@
     document.body.classList.toggle('arrange', on);
     if(!on) arrangeIndex = null;
     renderArrangeBar();
+    fitPadText();          // 行の高さが変わるので測り直す
   }
   arrangeBtn.addEventListener('click', () => {
     const on = !arrangeMode;
@@ -1597,9 +1615,11 @@
 
   document.body.addEventListener('pointerdown', ensureCtx, {once:false});
 
-  window.addEventListener('resize', () => {
-    // no-op; CSS grid handles reflow, dvh handles iOS toolbar resize
-  });
+  window.addEventListener('resize', fitPadText);
+  // パネルの開閉やアレンジ切替でパッド領域の高さが変わるので、実寸を監視して追従する
+  try{
+    new ResizeObserver(fitPadText).observe(gridEl);
+  }catch(e){}
 })();
 </script>
 </body>
