@@ -242,6 +242,28 @@
     border-radius:6px; padding:1px 5px;
   }
 
+  /* ---------- 確認ダイアログ ---------- */
+  #confirm{
+    position:fixed; inset:0; z-index:100;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(0,0,0,0.6); padding:24px;
+  }
+  #confirm[hidden]{ display:none; }
+  #confirm .cbox{
+    width:100%; max-width:340px;
+    background:linear-gradient(180deg,var(--panel),var(--chassis-2));
+    border:1px solid #4a3c28; border-radius:var(--radius);
+    padding:16px 16px 14px;
+    box-shadow:0 14px 40px rgba(0,0,0,0.6);
+  }
+  #confirm .ctext{
+    font-size:14px; font-weight:600; line-height:1.6; color:var(--ink);
+    margin-bottom:14px; word-break:break-word;
+  }
+  #confirm .crow{ display:flex; gap:8px; }
+  #confirm .crow .btn{ flex:1; padding:12px 10px; font-size:12px; }
+  .btn.danger{ color:#ffd9d9; background:#3a1b1b; border-color:#6b2f2f; }
+
   /* file input hidden */
   input[type=file]{ display:none; }
 
@@ -440,6 +462,16 @@
 <!-- accept は付けない。iOS Safari では accept="audio/*" を指定すると
      ファイルAppの「ダウンロード」内の mp3/wav が選択不可(グレーアウト)になるため。
      代わりに読み込み時にJS側で判定する。 -->
+<div id="confirm" hidden>
+  <div class="cbox">
+    <div class="ctext" id="confirmText"></div>
+    <div class="crow">
+      <button class="btn" id="confirmNo">キャンセル</button>
+      <button class="btn danger" id="confirmYes">削除する</button>
+    </div>
+  </div>
+</div>
+
 <input type="file" id="fileInput" multiple>
 
 <script>
@@ -1114,6 +1146,28 @@
     storageInfoEl.textContent = `${count}件 保存中${size}`;
   }
 
+  // ---------------- 確認ダイアログ ----------------
+  // 音の削除は取り消せないので、必ず確認してから消す
+  const confirmEl = document.getElementById('confirm');
+  const confirmText = document.getElementById('confirmText');
+  const confirmYes = document.getElementById('confirmYes');
+  const confirmNo = document.getElementById('confirmNo');
+  let confirmResolve = null;
+
+  function askConfirm(message){
+    confirmText.textContent = message;
+    confirmEl.hidden = false;
+    return new Promise((resolve) => { confirmResolve = resolve; });
+  }
+  function closeConfirm(answer){
+    confirmEl.hidden = true;
+    const r = confirmResolve; confirmResolve = null;
+    if(r) r(answer);
+  }
+  confirmYes.addEventListener('click', () => closeConfirm(true));
+  confirmNo.addEventListener('click', () => closeConfirm(false));
+  confirmEl.addEventListener('click', (e) => { if(e.target === confirmEl) closeConfirm(false); });
+
   // 読み込めなかったパッドを一瞬だけ赤く光らせる(ポップアップは出さない)
   function flashError(idx){
     const el = gridEl.children[idx];
@@ -1219,7 +1273,12 @@
   }
 
   // 選択中パッドの音を削除(色と選択状態はそのまま残す)
-  document.getElementById('deleteBtn').addEventListener('click', () => {
+  document.getElementById('deleteBtn').addEventListener('click', async () => {
+    if(selectedIndex === null) return;
+    const idx = selectedIndex;
+    const label = pads[idx].name ? `「${pads[idx].name}」` : 'の音';
+    if(!pads[idx].buffer) return;                     // 空パッドは何もしない
+    if(!await askConfirm(`P${page+1} の PAD ${String(idx+1).padStart(2,'0')} ${label}を削除します。よろしいですか？`)) return;
     if(selectedIndex === null) return;
     stopPadVoices(selectedIndex);
     pads[selectedIndex] = { name:null, buffer:null };
@@ -1374,7 +1433,10 @@
   });
 
   // 表示中ページのパッドだけ消す(他のページはそのまま)
-  document.getElementById('clearBtn').addEventListener('click', () => {
+  document.getElementById('clearBtn').addEventListener('click', async () => {
+    const n = pads.filter(p => p.buffer).length;
+    if(!n) return;                                    // 消すものが無ければ何もしない
+    if(!await askConfirm(`ページ ${page+1} の音 ${n}件 をすべて消去します。よろしいですか？`)) return;
     stopAllVoices();
     for(let i=0;i<pads.length;i++) pads[i] = { name:null, buffer:null };
     idbDeletePage(page);
