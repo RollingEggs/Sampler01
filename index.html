@@ -305,6 +305,10 @@
   body.arrange .pad{ touch-action:pan-y; }
 
   /* ---------- 背景プリセット(⚙パネル内・表示中ページに適用) ---------- */
+  #storageInfo{
+    font-family:var(--mono); font-size:10px; color:var(--ink-dim); flex:1;
+  }
+  #storageInfo.warn{ color:var(--danger); }
   #bgRow{ display:flex; gap:4px; flex:1; }
   .bgsw{
     flex:1; height:26px; min-width:0; padding:0;
@@ -385,6 +389,10 @@
   <div class="row">
     <div class="label">BG</div>
     <div id="bgRow"></div>
+  </div>
+  <div class="row">
+    <div class="label">SOUND</div>
+    <div id="storageInfo">—</div>
   </div>
 </div>
 
@@ -960,6 +968,130 @@
     }
   });
 
+  // ---------------- 音源の保存(IndexedDB) ----------------
+  // localStorage は容量も型も足りないので、音源だけ IndexedDB に置く。
+  // キーは "p{ページ}:{パッド}"。次に開いたときに自動で読み戻す。
+  const DB_NAME = 'padfeed', STORE = 'sounds';
+  let dbPromise = null;
+  let storeFailed = false;         // 容量不足などで保存できなかったか
+
+  function db(){
+    if(dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve) => {
+      try{
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          const d = req.result;
+          if(!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror   = () => resolve(null);
+      }catch(e){ resolve(null); }
+    });
+    return dbPromise;
+  }
+  const soundKey = (p, i) => `p${p}:${i}`;
+
+  async function idbPut(key, value){
+    const d = await db(); if(!d) return false;
+    return new Promise((res) => {
+      try{
+        const tx = d.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).put(value, key);
+        tx.oncomplete = () => res(true);
+        tx.onerror = tx.onabort = () => res(false);
+      }catch(e){ res(false); }
+    });
+  }
+  async function idbDelete(key){
+    const d = await db(); if(!d) return;
+    try{
+      const tx = d.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).delete(key);
+    }catch(e){}
+  }
+  async function idbDeletePage(p){
+    const d = await db(); if(!d) return;
+    try{
+      const tx = d.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).delete(IDBKeyRange.bound(`p${p}:`, `p${p}:\uffff`));
+    }catch(e){}
+  }
+  // 1ページ分の音源を読み出す → [{idx, name, data}]
+  async function idbLoadPage(p){
+    const d = await db(); if(!d) return [];
+    return new Promise((res) => {
+      const out = [];
+      try{
+        const tx = d.transaction(STORE, 'readonly');
+        const req = tx.objectStore(STORE).openCursor(IDBKeyRange.bound(`p${p}:`, `p${p}:\uffff`));
+        req.onsuccess = () => {
+          const c = req.result;
+          if(!c){ res(out); return; }
+          const m = /^p(\d+):(\d+)$/.exec(c.key);
+          if(m && c.value && c.value.data) out.push({ idx: +m[2], name: c.value.name, data: c.value.data });
+          c.continue();
+        };
+        req.onerror = () => res(out);
+      }catch(e){ res(out); }
+    });
+  }
+
+  const loadedPages = new Set();
+  // 保存してある音源を読み戻す。デコードが終わったパッドから順に表示される。
+  async function loadPageSounds(p){
+    if(loadedPages.has(p)) return;
+    loadedPages.add(p);
+    const items = await idbLoadPage(p);
+    if(!items.length) return;
+    ensureCtx();
+    for(const it of items){
+      if(it.idx >= padCount) continue;
+      const pg = pages[p];
+      if(!pg || pg.pads[it.idx].buffer) continue;   // 既に何か入っていれば触らない
+      try{
+        const buf = await ctx.decodeAudioData(it.data.slice(0));
+        pg.pads[it.idx] = { name: it.name, buffer: buf };
+      }catch(e){
+        idbDelete(soundKey(p, it.idx));             // 壊れていたら捨てる
+      }
+    }
+    if(p === page) renderGrid();
+    renderPageBar();
+    updateStorageInfo();
+  }
+
+  // ⚙パネルの保存状況表示
+  const storageInfoEl = document.getElementById('storageInfo');
+  async function updateStorageInfo(){
+    if(!storageInfoEl) return;
+    if(storeFailed){
+      storageInfoEl.textContent = '保存できません(容量不足)';
+      storageInfoEl.classList.add('warn');
+      return;
+    }
+    storageInfoEl.classList.remove('warn');
+    let count = 0;
+    const d = await db();
+    if(d){
+      count = await new Promise((res) => {
+        try{
+          const tx = d.transaction(STORE, 'readonly');
+          const req = tx.objectStore(STORE).count();
+          req.onsuccess = () => res(req.result); req.onerror = () => res(0);
+        }catch(e){ res(0); }
+      });
+    }
+    let size = '';
+    try{
+      if(navigator.storage && navigator.storage.estimate){
+        const est = await navigator.storage.estimate();
+        if(est && est.usage) size = ' / ' + (est.usage / 1048576).toFixed(1) + 'MB';
+      }
+    }catch(e){}
+    storageInfoEl.textContent = `${count}件 保存中${size}`;
+  }
+
   // 読み込めなかったパッドを一瞬だけ赤く光らせる(ポップアップは出さない)
   function flashError(idx){
     const el = gridEl.children[idx];
@@ -976,8 +1108,13 @@
     try{
       const arrayBuf = await file.arrayBuffer();
       const audioBuf = await ctx.decodeAudioData(arrayBuf.slice(0));
-      pads[idx] = { name: file.name.replace(/\.[^.]+$/,''), buffer: audioBuf };
+      const name = file.name.replace(/\.[^.]+$/,'');
+      pads[idx] = { name, buffer: audioBuf };
       renderGrid();
+      // 次回も使えるように保存する(失敗してもこのセッションでは鳴る)
+      const ok = await idbPut(soundKey(page, idx), { name, data: arrayBuf });
+      if(!ok){ storeFailed = true; flashError(idx); }
+      updateStorageInfo();
       return true;
     }catch(err){
       // 失敗したパッドは空きのまま残す(次のファイルがここに入る)
@@ -1064,7 +1201,9 @@
     if(selectedIndex === null) return;
     stopPadVoices(selectedIndex);
     pads[selectedIndex] = { name:null, buffer:null };
+    idbDelete(soundKey(page, selectedIndex));
     renderGrid();
+    updateStorageInfo();
   });
 
   // ---------------- ページ切替(最下部のバー) ----------------
@@ -1154,6 +1293,7 @@
     applyBackground();
     slideGrid(dir);
     saveSettings();
+    loadPageSounds(page);     // そのページの保存音を読み戻す
   }
 
   // 新しいページを進行方向から滑り込ませる
@@ -1215,9 +1355,11 @@
   document.getElementById('clearBtn').addEventListener('click', () => {
     stopAllVoices();
     for(let i=0;i<pads.length;i++) pads[i] = { name:null, buffer:null };
+    idbDeletePage(page);
     selectedIndex = null;
     renderGrid();
     renderPageBar();
+    updateStorageInfo();
   });
 
   // ---------------- アレンジ(音量 / EQ)モード ----------------
@@ -1365,7 +1507,11 @@
     panelBtn.classList.toggle('on', open);
     panelBtn.setAttribute('aria-expanded', String(open));
   }
-  panelBtn.addEventListener('click', () => { setPanelOpen(!panelOpen); saveSettings(); });
+  panelBtn.addEventListener('click', () => {
+    setPanelOpen(!panelOpen);
+    if(panelOpen) updateStorageInfo();
+    saveSettings();
+  });
 
   // ---------------- Settings persistence (layout only, not audio) ----------------
   function saveSettings(){
@@ -1438,6 +1584,11 @@
   renderGrid();
   renderPageBar();
   applyBackground();
+  // 前回の音源を読み戻す(表示中のページから。他ページは切り替え時に読む)
+  loadPageSounds(page);
+  updateStorageInfo();
+  // 保存を消されにくくする(対応ブラウザのみ)
+  try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist(); }catch(e){}
 
   document.body.addEventListener('pointerdown', ensureCtx, {once:false});
 
