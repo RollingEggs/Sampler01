@@ -170,6 +170,7 @@
   }
   /* 音が入ったパッドは色そのものが面になる(明るいパッド + 濃い文字) */
   .pad.assigned{
+    justify-content:center; align-items:center;
     background:linear-gradient(168deg, var(--pc-lite) 0%, var(--pc-mid) 100%);
     border-color:var(--pc);
     box-shadow:
@@ -195,9 +196,10 @@
     color:var(--ink-faint); letter-spacing:.02em; z-index:1;
   }
   .pad .padname{
-    font-family:var(--sans); font-size:13px; font-weight:700; color:var(--ink);
-    line-height:1.25; word-break:break-word; position:relative; z-index:1;
-    max-height:3.8em; overflow:hidden;
+    font-family:var(--sans); font-size:17px; font-weight:700; color:var(--ink);
+    line-height:1.2; word-break:break-word; text-align:center; width:100%;
+    position:relative; z-index:1;
+    display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
   }
   /* 濃い面では白文字、明るい面では黒文字(面の明度から自動で決める) */
   .pad.assigned .padnum{ color:rgba(255,255,255,0.8); text-shadow:0 1px 2px rgba(0,0,0,0.3); }
@@ -254,7 +256,8 @@
     font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:.08em;
     color:var(--teal); white-space:nowrap; flex:none;
   }
-  #padModeSel{ font-size:11px; padding:6px 22px 6px 8px; flex:2; min-width:0; }
+  #padModeSel{ font-size:11px; padding:6px 22px 6px 8px; flex:1; min-width:0; }
+  #padbar .pbrow .pblabel{ min-width:30px; }
   #velSeg button{ font-size:11px; padding:5px 2px; }
   #velLabel.off{ color:var(--danger); }
   .swrow{ display:flex; gap:3px; }
@@ -359,7 +362,6 @@
   <div class="hdr-actions">
     <button class="chip" id="arrangeBtn" aria-pressed="false">アレンジ</button>
     <button class="chip" id="assignBtn" aria-pressed="false">✎ 割当</button>
-    <button class="chip" id="fileBtn">📂 ファイル</button>
     <button class="chip" id="panelBtn" aria-expanded="false" aria-controls="panel">⚙</button>
   </div>
 </header>
@@ -407,8 +409,12 @@
 <div id="padbar" hidden>
   <div class="pbrow">
     <div class="pblabel" id="padbarLabel">PAD 01</div>
-    <select id="padModeSel" class="styled"></select>
+    <button class="chip warm" id="fileBtn">📂 ファイル</button>
     <button class="chip danger" id="deleteBtn" aria-label="このパッドの音を削除">🗑</button>
+  </div>
+  <div class="pbrow">
+    <div class="pblabel">MODE</div>
+    <select id="padModeSel" class="styled"></select>
   </div>
   <div class="pbrow">
     <div class="pblabel" id="velLabel">VEL</div>
@@ -943,12 +949,11 @@
     renderGrid();
   }
 
+  // 「割当」→ パッドを選ぶ → ここでファイル選択、の順でしか開かない
   document.getElementById('fileBtn').addEventListener('click', () => {
+    if(selectedIndex === null) return;
     ensureCtx();
-    let start = selectedIndex;
-    if(start === null) start = pads.findIndex(p => !p.buffer);   // 未選択なら最初の空きパッドから
-    if(start < 0) start = 0;                                     // 空きが無ければ先頭から差し替え
-    assignStartIndex = start;
+    assignStartIndex = selectedIndex;
     fileInput.value = '';
     fileInput.click();
   });
