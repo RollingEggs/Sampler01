@@ -190,7 +190,7 @@
     border-style:dashed; border-color:var(--pad-empty-border);
     justify-content:center; align-items:center;
   }
-  .pad.empty .padnum{ display:none; }
+  .pad.empty .padnum{ color:var(--ink-faint); opacity:0.85; }
   .pad .padnum{
     position:absolute; top:6px; left:9px; font-family:var(--mono); font-size:13px; font-weight:700;
     color:var(--ink-faint); letter-spacing:.02em; z-index:1;
@@ -348,6 +348,7 @@
     display:flex; align-items:stretch; gap:5px;
     height:46px; flex:none;
   }
+  #pagebar[hidden]{ display:none; }
   .pgarrow{
     border:1px solid #332c22; background:#171310; color:var(--ink-dim);
     font-family:var(--mono); font-size:22px; font-weight:700; line-height:1;
@@ -368,6 +369,7 @@
     transition:transform .12s ease-out;
   }
   #pagelabel span{ color:var(--amber); }
+  #pagelabel em{ font-style:normal; font-size:10px; color:var(--ink-faint); margin-left:4px; }
   #pagedots{ display:flex; gap:5px; pointer-events:none; }
   .pgdot{
     width:6px; height:6px; border-radius:50%; padding:0; border:0;
@@ -395,9 +397,9 @@
     <div class="label">PADS</div>
     <div class="segmented" id="padCountSeg">
       <button data-n="4">4</button>
-      <button data-n="6">6</button>
       <button data-n="10" class="active">10</button>
-      <button data-n="15">15</button>
+      <button data-n="20">20</button>
+      <button data-n="40">40</button>
     </div>
   </div>
   <div class="row">
@@ -479,7 +481,11 @@
   "use strict";
 
   // ---------------- State ----------------
-  let padCount = 10;
+  // パッドは全部で40個(番号1〜40)。表示サイズ(4/10/20/40)で何個ずつ見せるかが決まり、
+  // 表示しきれない分がページになる。例: 表示4ならP1は1〜4、P2は5〜8。
+  const PAD_TOTAL = 40;
+  const VIEW_SIZES = [4, 10, 20, 40];
+  let viewSize = 10;
   // 全体設定: poly=複数パッド同時再生 / mono=常に1音だけ(他を押すとカットイン)
   let voiceMode = 'mono';
   let assignMode = false;
@@ -489,16 +495,23 @@
   // ファイル選択ダイアログを開いた時点の開始パッド
   let assignStartIndex = null;
 
-  // ---------------- ページ ----------------
-  // 10ページ分のパッドセット。ページを切り替えると別の音・別の色になる。
-  const PAGE_COUNT = 10;
+  // ---------------- パッド(40個ぶん・すべて絶対番号で扱う) ----------------
   let page = 0;
-  let pages = [];               // pages[p] = { pads:[{name,buffer}], colors:['#hex' | '#hex|f'] }
-  let pads = [];                // 現在のページの pads(参照)
-  let padColors = [];           // 現在のページの colors(参照)
-  let padModes = [];            // 現在のページの modes(参照)
-  let padVels = [];             // 現在のページの vels(参照)
-  let padFx = [];               // 現在のページの fx(参照)
+  let pads = [];                // {name, buffer} × 40
+  let padColors = [];
+  let padModes = [];
+  let padVels = [];
+  let padFx = [];
+  let pageBg = [];              // ページごとの背景(最大10ページ)
+  const MAX_PAGES = PAD_TOTAL / VIEW_SIZES[0];   // 表示4のとき10ページ
+
+  const pageCount = () => PAD_TOTAL / viewSize;
+  const base = () => page * viewSize;            // 表示中の先頭パッド(0基点)
+  // 絶対番号のパッドが今画面に出ていれば、その要素を返す
+  function padEl(abs){
+    const k = abs - base();
+    return (k >= 0 && k < viewSize) ? gridEl.children[k] : null;
+  }
 
   // 15色 × (グラデ / 単色) = 30バリエーション
   const HUES = [
@@ -602,41 +615,26 @@
     return padFx[i];
   }
 
-  function makePage(){
-    return {
-      pads:   Array.from({length: padCount}, () => ({ name:null, buffer:null })),
-      colors: Array.from({length: padCount}, (_, i) => defaultColor(i)),
-      modes:  Array.from({length: padCount}, () => DEFAULT_MODE),
-      vels:   Array.from({length: padCount}, () => DEFAULT_VEL),
-      fx:     Array.from({length: padCount}, () => makeFx())
-      // bg は ensurePages がページ番号ごとの既定を入れる
-    };
-  }
-  // 全ページを padCount に合わせる(音と色は残す)
-  function ensurePages(){
-    while(pages.length < PAGE_COUNT) pages.push(makePage());
-    pages.forEach((pg, i) => {
-      if(!Array.isArray(pg.modes)) pg.modes = [];
-      if(!Array.isArray(pg.vels))  pg.vels  = [];
-      if(!Array.isArray(pg.fx))    pg.fx    = [];
-      while(pg.pads.length   < padCount) pg.pads.push({ name:null, buffer:null });
-      while(pg.colors.length < padCount) pg.colors.push(defaultColor(pg.colors.length));
-      while(pg.modes.length  < padCount) pg.modes.push(DEFAULT_MODE);
-      while(pg.vels.length   < padCount) pg.vels.push(DEFAULT_VEL);
-      while(pg.fx.length     < padCount) pg.fx.push(makeFx());
-      // 未設定なら「ページごとに違う背景」を既定にする
-      if(typeof pg.bg !== 'number' || !BACKGROUNDS[pg.bg]) pg.bg = i % BACKGROUNDS.length;
-    });
+  // 40個ぶんの配列を用意する(足りない分だけ既定値で埋める)
+  function ensurePads(){
+    while(pads.length      < PAD_TOTAL) pads.push({ name:null, buffer:null });
+    while(padColors.length < PAD_TOTAL) padColors.push(defaultColor(padColors.length));
+    while(padModes.length  < PAD_TOTAL) padModes.push(DEFAULT_MODE);
+    while(padVels.length   < PAD_TOTAL) padVels.push(DEFAULT_VEL);
+    while(padFx.length     < PAD_TOTAL) padFx.push(makeFx());
+    for(let i = 0; i < MAX_PAGES; i++){
+      if(typeof pageBg[i] !== 'number' || !BACKGROUNDS[pageBg[i]]) pageBg[i] = i % BACKGROUNDS.length;
+    }
   }
   function usePage(p){
-    page = ((p % PAGE_COUNT) + PAGE_COUNT) % PAGE_COUNT;
-    pads = pages[page].pads;
-    padColors = pages[page].colors;
-    padModes = pages[page].modes;
-    padVels = pages[page].vels;
-    padFx = pages[page].fx;
+    const n = pageCount();
+    page = ((p % n) + n) % n;
   }
-  function pageHasSound(p){ return pages[p].pads.some(x => x.buffer); }
+  function pageHasSound(p){
+    const b = p * viewSize;
+    for(let i = b; i < b + viewSize; i++) if(pads[i] && pads[i].buffer) return true;
+    return false;
+  }
 
   // ---------------- Audio engine ----------------
   let ctx = null;
@@ -756,7 +754,6 @@
     c.high.gain.value = f.treble;
     c.gain.gain.value = f.vol;
   }
-  function applyAllFx(){ padChains.forEach((c, i) => { if(c) applyFx(i); }); }
 
   function playBuffer(padIndex, tags, gain){
     const p = pads[padIndex];
@@ -803,7 +800,7 @@
     return false;
   }
   function refreshPadFlash(padIndex){
-    const el = gridEl.children[padIndex];
+    const el = padEl(padIndex);
     if(el) el.classList.toggle('playing', padSounding(padIndex));
   }
 
@@ -876,40 +873,42 @@
   const gridEl = document.getElementById('grid');
 
   function gridColsRows(n){
-    // returns {cols, rows} tuned for portrait iPhone screens
+    // 縦画面の iPhone に合わせた列数
     switch(n){
-      case 4: return {cols:2, rows:2};
-      case 6: return {cols:2, rows:3};
+      case 4:  return {cols:2, rows:2};
       case 10: return {cols:2, rows:5};
-      case 15: return {cols:3, rows:5};
+      case 20: return {cols:4, rows:5};
+      case 40: return {cols:5, rows:8};
       default: return {cols:2, rows:Math.ceil(n/2)};
     }
   }
 
-  // パッド数はページ共通。増やしたときは全ページに枠を足す(音と色は保持)
-  function rebuildPads(newCount){
-    padCount = newCount;
-    ensurePages();
-    usePage(page);
-    applyAllFx();
-    if(selectedIndex !== null && selectedIndex >= newCount) selectedIndex = null;
-    if(arrangeIndex !== null && arrangeIndex >= newCount){ arrangeIndex = null; renderArrangeBar(); }
-    stopAllVoices();
+  // 表示サイズを変える。パッドの中身(40個)はそのままで、見せ方だけが変わる。
+  function setViewSize(n){
+    if(!VIEW_SIZES.includes(n)) return;
+    const first = base();          // いま先頭に見えていたパッドを見失わないようにする
+    viewSize = n;
+    page = Math.min(pageCount() - 1, Math.floor(first / n));
+    selectedIndex = null;
     renderGrid();
+    renderPageBar();
+    applyBackground();
   }
 
   function renderGrid(){
-    const {cols, rows} = gridColsRows(padCount);
+    const {cols, rows} = gridColsRows(viewSize);
     gridEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
     gridEl.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
     gridEl.innerHTML = '';
-    for(let i=0;i<padCount;i++){
+    for(let k=0;k<viewSize;k++){
+      const i = base() + k;          // 絶対番号(0〜39)
       const p = pads[i];
       const el = document.createElement('div');
       const cv = colorOf(i);
       el.className = 'pad' + (p.buffer ? ' assigned' : ' empty')
         + (isFlat(cv) ? ' flat' : '')
         + (faceIsLight(cv) ? ' lightface' : '')
+        + (padSounding(i) ? ' playing' : '')
         + (i === selectedIndex ? ' selected' : '');
       el.dataset.idx = i;
       const v = cv, hex = baseHex(v), stops = faceStops(v);
@@ -922,7 +921,7 @@
         : (p.buffer ? `<div class="modetag">${MODE_TAGS[modeOf(i)]}${velOf(i) === 'off' ? '' : '·' + VEL_TAGS[velOf(i)]}</div>` : '');
       el.innerHTML = p.buffer
         ? `${tag}<div class="padnum">${i+1}</div><div class="padname">${escapeHtml(p.name)}</div>`
-        : `${tag}<div class="padempty-icon">＋</div>`;
+        : `${tag}<div class="padnum">${i+1}</div><div class="padempty-icon">＋</div>`;
       attachPadEvents(el, i);
       gridEl.appendChild(el);
     }
@@ -1044,7 +1043,7 @@
     });
     return dbPromise;
   }
-  const soundKey = (p, i) => `p${p}:${i}`;
+  const soundKey = (abs) => `s${abs}`;
 
   async function idbPut(key, value){
     const d = await db(); if(!d) return false;
@@ -1064,26 +1063,29 @@
       tx.objectStore(STORE).delete(key);
     }catch(e){}
   }
-  async function idbDeletePage(p){
-    const d = await db(); if(!d) return;
-    try{
-      const tx = d.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).delete(IDBKeyRange.bound(`p${p}:`, `p${p}:\uffff`));
-    }catch(e){}
-  }
-  // 1ページ分の音源を読み出す → [{idx, name, data}]
-  async function idbLoadPage(p){
+  // 保存してあるすべての音源を読み出す → [{idx, name, data}]
+  async function idbLoadAll(){
     const d = await db(); if(!d) return [];
     return new Promise((res) => {
       const out = [];
       try{
         const tx = d.transaction(STORE, 'readonly');
-        const req = tx.objectStore(STORE).openCursor(IDBKeyRange.bound(`p${p}:`, `p${p}:\uffff`));
+        const req = tx.objectStore(STORE).openCursor();
         req.onsuccess = () => {
           const c = req.result;
           if(!c){ res(out); return; }
-          const m = /^p(\d+):(\d+)$/.exec(c.key);
-          if(m && c.value && c.value.data) out.push({ idx: +m[2], name: c.value.name, data: c.value.data });
+          const key = String(c.key);
+          let idx = null;
+          let m = /^s(\d+)$/.exec(key);
+          if(m) idx = +m[1];
+          else {
+            // 旧形式 "p{ページ}:{パッド}" からの移行(ページ幅10で並べ直す)
+            const o = /^p(\d+):(\d+)$/.exec(key);
+            if(o) idx = +o[1] * 10 + +o[2];
+          }
+          if(idx !== null && idx < PAD_TOTAL && c.value && c.value.data){
+            out.push({ idx, name: c.value.name, data: c.value.data, key });
+          }
           c.continue();
         };
         req.onerror = () => res(out);
@@ -1091,26 +1093,32 @@
     });
   }
 
-  const loadedPages = new Set();
-  // 保存してある音源を読み戻す。デコードが終わったパッドから順に表示される。
-  async function loadPageSounds(p){
-    if(loadedPages.has(p)) return;
-    loadedPages.add(p);
-    const items = await idbLoadPage(p);
+  let soundsLoaded = false;
+  // 保存してある音源を読み戻す。表示中のページから先にデコードする。
+  async function loadStoredSounds(){
+    if(soundsLoaded) return;
+    soundsLoaded = true;
+    const items = await idbLoadAll();
     if(!items.length) return;
     ensureCtx();
+    const inView = (it) => it.idx >= base() && it.idx < base() + viewSize;
+    items.sort((a, b) => (inView(b) ? 1 : 0) - (inView(a) ? 1 : 0));
+    let shown = 0;
     for(const it of items){
-      if(it.idx >= padCount) continue;
-      const pg = pages[p];
-      if(!pg || pg.pads[it.idx].buffer) continue;   // 既に何か入っていれば触らない
+      if(pads[it.idx].buffer) continue;
       try{
         const buf = await ctx.decodeAudioData(it.data.slice(0));
-        pg.pads[it.idx] = { name: it.name, buffer: buf };
+        pads[it.idx] = { name: it.name, buffer: buf };
+        if(it.key !== soundKey(it.idx)){         // 旧キーなら新キーで置き直す
+          idbPut(soundKey(it.idx), { name: it.name, data: it.data });
+          idbDelete(it.key);
+        }
+        if(++shown % 4 === 0) renderGrid();
       }catch(e){
-        idbDelete(soundKey(p, it.idx));             // 壊れていたら捨てる
+        idbDelete(it.key);                        // 壊れていたら捨てる
       }
     }
-    if(p === page) renderGrid();
+    renderGrid();
     renderPageBar();
     updateStorageInfo();
   }
@@ -1170,16 +1178,16 @@
 
   // 読み込めなかったパッドを一瞬だけ赤く光らせる(ポップアップは出さない)
   function flashError(idx){
-    const el = gridEl.children[idx];
+    const el = padEl(idx);
     if(!el) return;
     el.classList.add('loaderr');
-    setTimeout(() => { const e2 = gridEl.children[idx]; if(e2) e2.classList.remove('loaderr'); }, 900);
+    setTimeout(() => { const e2 = padEl(idx); if(e2) e2.classList.remove('loaderr'); }, 900);
   }
 
   // 戻り値: 読み込みに成功したら true
   async function assignFileToPad(idx, file){
     ensureCtx();
-    const el = gridEl.children[idx];
+    const el = padEl(idx);
     if(el){ el.querySelector('.padname') && (el.querySelector('.padname').textContent = '読込中…'); }
     try{
       const arrayBuf = await file.arrayBuffer();
@@ -1188,7 +1196,7 @@
       pads[idx] = { name, buffer: audioBuf };
       renderGrid();
       // 次回も使えるように保存する(失敗してもこのセッションでは鳴る)
-      const ok = await idbPut(soundKey(page, idx), { name, data: arrayBuf });
+      const ok = await idbPut(soundKey(idx), { name, data: arrayBuf });
       if(!ok){ storeFailed = true; flashError(idx); }
       updateStorageInfo();
       return true;
@@ -1282,7 +1290,7 @@
     if(selectedIndex === null) return;
     stopPadVoices(selectedIndex);
     pads[selectedIndex] = { name:null, buffer:null };
-    idbDelete(soundKey(page, selectedIndex));
+    idbDelete(soundKey(selectedIndex));
     renderGrid();
     updateStorageInfo();
   });
@@ -1293,6 +1301,7 @@
   const pageLabelEl = document.getElementById('pagelabel');
   const pageSwipeEl = document.getElementById('pageswipe');
   const pageChipEl = document.getElementById('pageChip');
+  const pagebarEl = document.getElementById('pagebar');
 
   // 背景プリセット(表示中のページに適用)
   const bgRowEl = document.getElementById('bgRow');
@@ -1302,13 +1311,13 @@
     b.style.background = css;
     b.setAttribute('aria-label', `背景 ${i+1}`);
     b.addEventListener('click', () => {
-      pages[page].bg = i;
+      pageBg[page] = i;
       applyBackground();
       saveSettings();
     });
     bgRowEl.appendChild(b);
   });
-  for(let p = 0; p < PAGE_COUNT; p++){
+  for(let p = 0; p < MAX_PAGES; p++){
     const d = document.createElement('div');
     d.className = 'pgdot';
     pagedotsEl.appendChild(d);
@@ -1363,10 +1372,8 @@
   // raw は循環前のページ番号。差の符号がそのままスライド方向になる。
   function goToPage(raw){
     const dir = raw === page ? 0 : (raw > page ? 1 : -1);
-    stopAllVoices();          // ページが変わるとパッドの中身も変わるので鳴らしっぱなしを防ぐ
-    selectedIndex = null;
+    selectedIndex = null;     // 音は止めない(同じ40個のパッドを見る位置が変わるだけ)
     usePage(raw);
-    applyAllFx();
     arrangeIndex = null;
     renderArrangeBar();
     renderGrid();
@@ -1374,7 +1381,6 @@
     applyBackground();
     slideGrid(dir);
     saveSettings();
-    loadPageSounds(page);     // そのページの保存音を読み戻す
   }
 
   // 新しいページを進行方向から滑り込ませる
@@ -1392,16 +1398,20 @@
 
   const bgEl = document.getElementById('bg');
   function applyBackground(){
-    bgEl.style.background = BACKGROUNDS[pages[page].bg] || BACKGROUNDS[0];
-    [...bgRowEl.children].forEach((b, i) => b.classList.toggle('on', i === pages[page].bg));
+    bgEl.style.background = BACKGROUNDS[pageBg[page]] || BACKGROUNDS[0];
+    [...bgRowEl.children].forEach((b, i) => b.classList.toggle('on', i === pageBg[page]));
   }
 
   function renderPageBar(){
-    pageLabelEl.innerHTML = `PAGE <span>${page+1}</span> / ${PAGE_COUNT}`;
+    const n = pageCount();
+    // 表示40なら1ページなので、ページバーごと隠す
+    pagebarEl.hidden = (n <= 1);
+    pageLabelEl.innerHTML = `PAGE <span>${page+1}</span> / ${n}  <em>PAD ${base()+1}-${base()+viewSize}</em>`;
     pageChipEl.textContent = `P${page+1}`;
     [...pagedotsEl.children].forEach((b, p) => {
+      b.hidden = (p >= n);
       b.classList.toggle('on', p === page);
-      b.classList.toggle('has', p !== page && pageHasSound(p));
+      b.classList.toggle('has', p !== page && p < n && pageHasSound(p));
     });
   }
 
@@ -1411,7 +1421,7 @@
     if(!btn) return;
     [...e.currentTarget.children].forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    rebuildPads(parseInt(btn.dataset.n, 10));
+    setViewSize(parseInt(btn.dataset.n, 10));
     saveSettings();
   });
 
@@ -1434,12 +1444,16 @@
 
   // 表示中ページのパッドだけ消す(他のページはそのまま)
   document.getElementById('clearBtn').addEventListener('click', async () => {
-    const n = pads.filter(p => p.buffer).length;
+    const from = base(), to = from + viewSize;
+    let n = 0;
+    for(let i=from;i<to;i++) if(pads[i].buffer) n++;
     if(!n) return;                                    // 消すものが無ければ何もしない
-    if(!await askConfirm(`ページ ${page+1} の音 ${n}件 をすべて消去します。よろしいですか？`)) return;
+    if(!await askConfirm(`ページ ${page+1}(PAD ${from+1}〜${to})の音 ${n}件 をすべて消去します。よろしいですか？`)) return;
     stopAllVoices();
-    for(let i=0;i<pads.length;i++) pads[i] = { name:null, buffer:null };
-    idbDeletePage(page);
+    for(let i=from;i<to;i++){
+      pads[i] = { name:null, buffer:null };
+      idbDelete(soundKey(i));
+    }
     selectedIndex = null;
     renderGrid();
     renderPageBar();
@@ -1602,52 +1616,48 @@
   function saveSettings(){
     try{
       localStorage.setItem('padfeed_settings', JSON.stringify({
-        padCount, voiceMode, panelOpen, page,
-        pageColors: pages.map(pg => pg.colors),
-        pageModes:  pages.map(pg => pg.modes),
-        pageVels:   pages.map(pg => pg.vels),
-        pageFx:     pages.map(pg => pg.fx),
-        pageBg:     pages.map(pg => pg.bg)
+        v: 2, viewSize, voiceMode, panelOpen, page,
+        colors: padColors, modes: padModes, vels: padVels, fx: padFx, pageBg
       }));
     }catch(e){}
   }
-  let legacyMode = null;   // 旧 playMode からの移行用
   function loadSettings(){
     try{
       const raw = localStorage.getItem('padfeed_settings');
       if(!raw) return;
       const s = JSON.parse(raw);
-      if(s.padCount) padCount = s.padCount;
       if(s.voiceMode) voiceMode = s.voiceMode;
-      // 旧形式(全体で1つの playMode)からの移行
-      else if(s.playMode){
-        voiceMode = s.playMode.startsWith('cut') ? 'mono' : 'poly';
-        legacyMode = { cutpress:'press', cutrelease:'release' }[s.playMode] || s.playMode;
-      }
       if(typeof s.panelOpen === 'boolean') panelOpen = s.panelOpen;
-      const isColorArray = a => Array.isArray(a) && a.every(c => typeof c === 'string');
-      if(Array.isArray(s.pageColors)){
-        pages = s.pageColors.filter(isColorArray).slice(0, PAGE_COUNT)
-                  .map(colors => ({ pads:[], colors: colors.slice(), modes:[], vels:[], fx:[] }));
-      } else if(isColorArray(s.padColors)){
-        pages = [{ pads:[], colors: s.padColors.slice(), modes:[], vels:[], fx:[] }];  // 旧形式(単一ページ)
-      }
-      if(Array.isArray(s.pageFx)){
-        s.pageFx.forEach((arr, i) => {
-          if(!pages[i] || !Array.isArray(arr)) return;
-          pages[i].fx = arr.map(o => Object.assign(makeFx(), o && typeof o === 'object' ? o : null));
-        });
-      }
-      if(Array.isArray(s.pageVels)){
-        s.pageVels.forEach((v, i) => { if(pages[i] && isColorArray(v)) pages[i].vels = v.slice(); });
-      }
-      if(Array.isArray(s.pageModes)){
-        s.pageModes.forEach((m, i) => { if(pages[i] && isColorArray(m)) pages[i].modes = m.slice(); });
-      } else if(legacyMode){
-        pages.forEach(pg => { pg.modes = new Array(padCount).fill(legacyMode); });
-      }
-      if(Array.isArray(s.pageBg) && s.pageBg.some(v => v)){
-        s.pageBg.forEach((v, i) => { if(pages[i]) pages[i].bg = v; });
+      if(VIEW_SIZES.includes(s.viewSize)) viewSize = s.viewSize;
+
+      const strArr = a => Array.isArray(a) && a.every(x => typeof x === 'string');
+      if(s.v === 2){
+        if(strArr(s.colors)) padColors = s.colors.slice(0, PAD_TOTAL);
+        if(strArr(s.modes))  padModes  = s.modes.slice(0, PAD_TOTAL);
+        if(strArr(s.vels))   padVels   = s.vels.slice(0, PAD_TOTAL);
+        if(Array.isArray(s.fx)) padFx  = s.fx.slice(0, PAD_TOTAL).map(o => Object.assign(makeFx(), o && typeof o === 'object' ? o : null));
+        if(Array.isArray(s.pageBg)) pageBg = s.pageBg.slice(0, MAX_PAGES);
+      } else {
+        // 旧形式(ページごとに独立したパッドセット)からの移行。
+        // ページ幅は当時の padCount。並び順そのままに 1〜40 へ詰め直す。
+        const w = s.padCount || 10;
+        const flat = (arrs, conv) => {
+          if(!Array.isArray(arrs)) return;
+          const out = [];
+          arrs.forEach((arr, p) => {
+            if(!Array.isArray(arr)) return;
+            arr.forEach((v, i) => { const abs = p * w + i; if(abs < PAD_TOTAL) out[abs] = conv ? conv(v) : v; });
+          });
+          return out;
+        };
+        const c = flat(s.pageColors); if(c) padColors = c;
+        const m = flat(s.pageModes);  if(m) padModes  = m;
+        const v = flat(s.pageVels);   if(v) padVels   = v;
+        const f = flat(s.pageFx, o => Object.assign(makeFx(), o && typeof o === 'object' ? o : null));
+        if(f) padFx = f;
+        if(Array.isArray(s.pageBg)) pageBg = s.pageBg.slice(0, MAX_PAGES);
+        if(s.playMode) voiceMode = s.playMode.startsWith('cut') ? 'mono' : 'poly';
+        if(VIEW_SIZES.includes(w)) viewSize = w;
       }
       if(typeof s.page === 'number') page = s.page;
     }catch(e){}
@@ -1657,20 +1667,20 @@
   loadSettings();
   // sync UI to loaded settings
   [...document.getElementById('padCountSeg').children].forEach(b => {
-    b.classList.toggle('active', parseInt(b.dataset.n,10) === padCount);
+    b.classList.toggle('active', parseInt(b.dataset.n,10) === viewSize);
   });
   setVoiceMode(voiceMode);
   setPanelOpen(panelOpen);
   setAssignMode(false);
   setArrangeMode(false);
 
-  ensurePages();
+  ensurePads();
   usePage(page);
   renderGrid();
   renderPageBar();
   applyBackground();
-  // 前回の音源を読み戻す(表示中のページから。他ページは切り替え時に読む)
-  loadPageSounds(page);
+  // 前回の音源を読み戻す(表示中のパッドから順にデコードする)
+  loadStoredSounds();
   updateStorageInfo();
   // 保存を消されにくくする(対応ブラウザのみ)
   try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist(); }catch(e){}
