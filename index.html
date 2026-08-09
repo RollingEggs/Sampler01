@@ -325,6 +325,7 @@
   #arrangebar[hidden]{ display:none; }
   #arrangeLabel{ color:var(--amber); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .faders{ display:flex; gap:6px; }
+  .faders[hidden]{ display:none; }
   .fader{ flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; gap:3px; }
   .fader .slot{
     height:236px; width:100%; display:flex; align-items:center; justify-content:center;
@@ -352,6 +353,23 @@
     grid-auto-rows:96px; align-content:start;
   }
   body.arrange .pad{ touch-action:pan-y; }
+
+  /* ---------- 波形エディタ(トリミング / フェード) ---------- */
+  #arrangeTabs button{ font-size:11px; padding:6px 4px; }
+  #waveedit[hidden]{ display:none; }
+  #waveCanvas{
+    display:block; width:100%; height:150px;
+    background:#141110; border:1px solid #332c22; border-radius:10px;
+    touch-action:none;
+  }
+  .waverow{ display:flex; align-items:center; gap:8px; margin-top:6px; }
+  .wavevals{
+    flex:1; min-width:0;
+    font-family:var(--mono); font-size:11px; font-weight:700; color:var(--ink);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .wavevals em{ font-style:normal; color:var(--ink-faint); font-weight:600; }
+  .wavevals.off{ color:var(--ink-faint); }
 
   /* ---------- 背景プリセット(⚙パネル内・表示中ページに適用) ---------- */
   #storageInfo{
@@ -455,7 +473,20 @@
     <div class="pblabel" id="arrangeLabel">パッドを押してください</div>
     <button class="chip" id="fxResetBtn">リセット</button>
   </div>
+  <div class="pbrow">
+    <div class="segmented" id="arrangeTabs">
+      <button data-t="fx" class="active">音量 / EQ</button>
+      <button data-t="wave">波形</button>
+    </div>
+  </div>
   <div class="faders" id="faders"></div>
+  <div id="waveedit" hidden>
+    <canvas id="waveCanvas"></canvas>
+    <div class="waverow">
+      <div class="wavevals" id="waveVals">—</div>
+      <button class="chip" id="waveResetBtn">全体</button>
+    </div>
+  </div>
 </div>
 
 <div id="padbar" hidden>
@@ -647,9 +678,31 @@
   function velOf(i){ return VEL_CURVES[padVels[i]] ? padVels[i] : DEFAULT_VEL; }
 
   // パッドごとの音量と3バンドEQ(dB)
-  const FX_DEFAULT = { vol:1, bass:0, mid:0, treble:0 };
+  // start/end/fadeIn/fadeOut は秒。end:0 は「バッファの最後まで」を表す
+  const FX_DEFAULT = { vol:1, bass:0, mid:0, treble:0, start:0, end:0, fadeIn:0, fadeOut:0 };
+  const MIN_REGION = 0.02;      // これより短くは切れない
   const EQ_RANGE = 15;          // ±15dB
   function makeFx(){ return Object.assign({}, FX_DEFAULT); }
+  // トリミングとフェードを実際のバッファ長に合わせて解決する
+  function playRegion(idx){
+    const p = pads[idx], f = fxOf(idx);
+    const total = (p && p.buffer) ? p.buffer.duration : 0;
+    let offset = Math.min(Math.max(0, f.start || 0), Math.max(0, total - MIN_REGION));
+    let end = (f.end > 0) ? Math.min(f.end, total) : total;
+    if(end - offset < MIN_REGION) end = Math.min(total, offset + MIN_REGION);
+    const dur = Math.max(MIN_REGION, end - offset);
+    let fi = Math.max(0, f.fadeIn || 0), fo = Math.max(0, f.fadeOut || 0);
+    if(fi + fo > dur){                       // 収まらないときは比率を保って縮める
+      const k = dur / (fi + fo);
+      fi *= k; fo *= k;
+    }
+    return { offset, dur, fadeIn: fi, fadeOut: fo, total };
+  }
+  // トリミング/フェードだけ初期値に戻す(音量やEQはパッドの性格として残す)
+  function resetRegion(idx){
+    const f = fxOf(idx);
+    f.start = 0; f.end = 0; f.fadeIn = 0; f.fadeOut = 0;
+  }
   function fxOf(i){
     if(!padFx[i]) padFx[i] = makeFx();
     return padFx[i];
@@ -801,15 +854,30 @@
     const p = pads[padIndex];
     if(!p || !p.buffer) return null;
     ensureCtx();
+    const r = playRegion(padIndex);
     const src = ctx.createBufferSource();
     src.buffer = p.buffer;
+    // フェード用とベロシティ用でゲインを分ける。
+    // ベロシティは発音後に微調整が入るので、同じ AudioParam を奪い合わせない。
+    const env = ctx.createGain();
     const g = ctx.createGain();
     g.gain.value = (typeof gain === 'number') ? gain : 1;
-    src.connect(g);
+    src.connect(env); env.connect(g);
     g.connect(getChain(padIndex).low);
-    const v = Object.assign({ source:src, gainNode:g, padIndex, stopping:false }, tags || {});
+
+    const t0 = ctx.currentTime;
+    if(r.fadeIn > 0){
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(1, t0 + r.fadeIn);
+    }
+    if(r.fadeOut > 0){
+      env.gain.setValueAtTime(1, t0 + r.dur - r.fadeOut);
+      env.gain.linearRampToValueAtTime(0.0001, t0 + r.dur);
+    }
+
+    const v = Object.assign({ source:src, gainNode:g, envNode:env, padIndex, stopping:false }, tags || {});
     src.onended = () => { voices.delete(v); refreshPadFlash(padIndex); };
-    src.start(0);
+    src.start(0, r.offset, r.dur);      // トリミングした範囲だけ鳴らす
     voices.add(v);
     refreshPadFlash(padIndex);
     return v;
@@ -1229,6 +1297,7 @@
     hideLoading();
     renderGrid();
     renderPageBar();
+    renderArrangeBar();      // デコードが終わったら波形も描き直す
     updateStorageInfo();
   }
 
@@ -1309,7 +1378,10 @@
       const audioBuf = await ctx.decodeAudioData(arrayBuf.slice(0));
       const name = file.name.replace(/\.[^.]+$/,'');
       pads[idx] = { name, buffer: audioBuf };
+      resetRegion(idx);            // 別の音になるのでトリミング/フェードは初期化
+      peakCache.delete(idx);
       renderGrid();
+      if(arrangeIndex === idx) renderArrangeBar();
       // 次回も使えるように保存する(失敗してもこのセッションでは鳴る)
       const ok = await idbPut(soundKey(idx), { name, data: arrayBuf });
       if(!ok){ storeFailed = true; flashError(idx); }
@@ -1405,6 +1477,7 @@
     if(selectedIndex === null) return;
     stopPadVoices(selectedIndex);
     pads[selectedIndex] = { name:null, buffer:null };
+    peakCache.delete(selectedIndex);
     idbDelete(soundKey(selectedIndex));
     renderGrid();
     updateStorageInfo();
@@ -1565,6 +1638,7 @@
 
     // 状態を初期値に戻してから、そのセットの設定を読み込む
     pads = []; padColors = []; padModes = []; padVels = []; padFx = []; pageBg = [];
+    peakCache.clear();
     viewSize = 10; page = 0; voiceMode = 'mono';
     selectedIndex = null; arrangeIndex = null;
     loadSettings();
@@ -1612,6 +1686,7 @@
     stopAllVoices();
     for(let i=from;i<to;i++){
       pads[i] = { name:null, buffer:null };
+      peakCache.delete(i);
       idbDelete(soundKey(i));
     }
     selectedIndex = null;
@@ -1688,6 +1763,200 @@
     slot.addEventListener('pointercancel', endDrag);
   });
 
+  // ---------------- 波形エディタ ----------------
+  const arrangeTabs = document.getElementById('arrangeTabs');
+  const fadersWrap  = document.getElementById('faders');
+  const waveEdit    = document.getElementById('waveedit');
+  const waveCanvas  = document.getElementById('waveCanvas');
+  const waveVals    = document.getElementById('waveVals');
+  let arrangeTab = 'fx';
+  const peakCache = new Map();     // パッド番号 → [min,max, min,max, ...]
+
+  const WAVE_BUCKETS = 480;
+  function peaksOf(idx){
+    if(peakCache.has(idx)) return peakCache.get(idx);
+    const buf = pads[idx] && pads[idx].buffer;
+    if(!buf) return null;
+    const data = buf.getChannelData(0);
+    const step = Math.max(1, Math.floor(data.length / WAVE_BUCKETS));
+    const out = new Float32Array(WAVE_BUCKETS * 2);
+    for(let i = 0; i < WAVE_BUCKETS; i++){
+      let lo = 1, hi = -1;
+      const from = i * step, to = Math.min(data.length, from + step);
+      for(let j = from; j < to; j++){ const x = data[j]; if(x < lo) lo = x; if(x > hi) hi = x; }
+      if(from >= to){ lo = 0; hi = 0; }
+      out[i*2] = lo; out[i*2+1] = hi;
+    }
+    peakCache.set(idx, out);
+    return out;
+  }
+
+  function drawWave(){
+    const cvs = waveCanvas;
+    const dpr = window.devicePixelRatio || 1;
+    const w = cvs.clientWidth, h = cvs.clientHeight;
+    if(!w || !h) return;
+    if(cvs.width !== Math.round(w*dpr) || cvs.height !== Math.round(h*dpr)){
+      cvs.width = Math.round(w*dpr); cvs.height = Math.round(h*dpr);
+    }
+    const g = cvs.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+
+    const idx = arrangeIndex;
+    const buf = (idx !== null && pads[idx]) ? pads[idx].buffer : null;
+    if(idx === null || !buf){
+      g.fillStyle = '#605848';
+      g.font = '12px ui-monospace, monospace';
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(idx === null ? 'パッドを押してください' : '音がありません', w/2, h/2);
+      return;
+    }
+
+    const peaks = peaksOf(idx);
+    const r = playRegion(idx);
+    const total = r.total || 1;
+    const x0 = (r.offset / total) * w;
+    const x1 = ((r.offset + r.dur) / total) * w;
+    const mid = h / 2;
+    const hue = baseHex(colorOf(idx));
+
+    // 波形
+    g.fillStyle = '#4a4239';
+    for(let i = 0; i < WAVE_BUCKETS; i++){
+      const x = i * w / WAVE_BUCKETS;
+      const inRegion = x >= x0 - 0.5 && x <= x1 + 0.5;
+      g.fillStyle = inRegion ? hue : '#3b3529';
+      const lo = peaks[i*2], hi = peaks[i*2+1];
+      const y1 = mid - hi * mid * 0.92, y2 = mid - lo * mid * 0.92;
+      g.fillRect(x, y1, Math.max(1, w / WAVE_BUCKETS), Math.max(1, y2 - y1));
+    }
+    // 範囲外を暗くする
+    g.fillStyle = 'rgba(10,8,6,0.62)';
+    g.fillRect(0, 0, x0, h);
+    g.fillRect(x1, 0, w - x1, h);
+
+    // フェードの斜線
+    const fiX = x0 + (r.fadeIn / r.dur) * (x1 - x0);
+    const foX = x1 - (r.fadeOut / r.dur) * (x1 - x0);
+    g.strokeStyle = 'rgba(255,255,255,0.85)';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(x0, h - 2); g.lineTo(fiX, 2);
+    g.moveTo(foX, 2);    g.lineTo(x1, h - 2);
+    g.stroke();
+    // フェードのつまみ
+    g.fillStyle = '#fff';
+    [fiX, foX].forEach(x => { g.beginPath(); g.arc(x, 8, 7, 0, Math.PI*2); g.fill(); });
+
+    // トリミングの縦ハンドル
+    g.fillStyle = var_amber();
+    g.fillRect(x0 - 2, 0, 4, h);
+    g.fillRect(x1 - 2, 0, 4, h);
+    g.beginPath(); g.arc(x0, h - 9, 8, 0, Math.PI*2); g.fill();
+    g.beginPath(); g.arc(x1, h - 9, 8, 0, Math.PI*2); g.fill();
+  }
+  function var_amber(){
+    return getComputedStyle(document.documentElement).getPropertyValue('--amber').trim() || '#ff8a34';
+  }
+
+  function renderWaveVals(){
+    const idx = arrangeIndex;
+    const buf = (idx !== null && pads[idx]) ? pads[idx].buffer : null;
+    if(!buf){ waveVals.textContent = '—'; waveVals.classList.add('off'); return; }
+    waveVals.classList.remove('off');
+    const r = playRegion(idx);
+    const f = (x) => x.toFixed(2) + 's';
+    waveVals.innerHTML = `<em>開始</em> ${f(r.offset)}  <em>終了</em> ${f(r.offset + r.dur)}  ` +
+                         `<em>IN</em> ${f(r.fadeIn)}  <em>OUT</em> ${f(r.fadeOut)}`;
+  }
+  function renderWave(){
+    if(arrangeTab !== 'wave') return;
+    drawWave();
+    renderWaveVals();
+  }
+
+  // 触った位置から一番近いハンドルを掴む(上部はフェード優先)
+  let waveDrag = null;
+  function waveHandleAt(px, py){
+    const idx = arrangeIndex;
+    if(idx === null || !(pads[idx] && pads[idx].buffer)) return null;
+    const w = waveCanvas.clientWidth, h = waveCanvas.clientHeight;
+    const r = playRegion(idx), total = r.total || 1;
+    const x0 = (r.offset / total) * w, x1 = ((r.offset + r.dur) / total) * w;
+    const fiX = x0 + (r.fadeIn / r.dur) * (x1 - x0);
+    const foX = x1 - (r.fadeOut / r.dur) * (x1 - x0);
+    const cands = (py < h * 0.45)
+      ? [['fadeIn', fiX], ['fadeOut', foX], ['start', x0], ['end', x1]]
+      : [['start', x0], ['end', x1], ['fadeIn', fiX], ['fadeOut', foX]];
+    let best = null, bestD = Infinity;
+    cands.forEach(([k, x], i) => {
+      const d = Math.abs(px - x) + i * 0.001;    // 同距離なら優先順の高い方
+      if(d < bestD){ bestD = d; best = k; }
+    });
+    return best;
+  }
+  function waveSetFrom(px){
+    const idx = arrangeIndex;
+    if(idx === null || !waveDrag) return;
+    const w = waveCanvas.clientWidth;
+    const f = fxOf(idx);
+    const total = pads[idx].buffer.duration;
+    const t = Math.min(total, Math.max(0, (px / w) * total));
+    const r = playRegion(idx);
+    if(waveDrag === 'start'){
+      f.start = Math.min(t, (f.end > 0 ? f.end : total) - MIN_REGION);
+      if(f.start < 0) f.start = 0;
+    } else if(waveDrag === 'end'){
+      const e = Math.max(t, f.start + MIN_REGION);
+      f.end = (e >= total - 0.001) ? 0 : e;      // 端まで伸ばしたら「最後まで」に戻す
+    } else if(waveDrag === 'fadeIn'){
+      f.fadeIn = Math.min(Math.max(0, t - r.offset), r.dur);
+    } else if(waveDrag === 'fadeOut'){
+      f.fadeOut = Math.min(Math.max(0, (r.offset + r.dur) - t), r.dur);
+    }
+    renderWave();
+    saveSoon();
+  }
+  waveCanvas.addEventListener('pointerdown', (e) => {
+    if(arrangeIndex === null) return;
+    e.preventDefault();
+    const b = waveCanvas.getBoundingClientRect();
+    waveDrag = waveHandleAt(e.clientX - b.left, e.clientY - b.top);
+    if(!waveDrag) return;
+    try{ waveCanvas.setPointerCapture(e.pointerId); }catch(err){}
+    waveSetFrom(e.clientX - b.left);
+  }, {passive:false});
+  waveCanvas.addEventListener('pointermove', (e) => {
+    if(!waveDrag) return;
+    e.preventDefault();
+    waveSetFrom(e.clientX - waveCanvas.getBoundingClientRect().left);
+  }, {passive:false});
+  const endWaveDrag = () => { waveDrag = null; };
+  waveCanvas.addEventListener('pointerup', endWaveDrag);
+  waveCanvas.addEventListener('pointercancel', endWaveDrag);
+
+  document.getElementById('waveResetBtn').addEventListener('click', () => {
+    if(arrangeIndex === null) return;
+    resetRegion(arrangeIndex);
+    renderWave();
+    saveSettings();
+  });
+
+  arrangeTabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if(!btn) return;
+    setArrangeTab(btn.dataset.t);
+  });
+  function setArrangeTab(t){
+    arrangeTab = (t === 'wave') ? 'wave' : 'fx';
+    [...arrangeTabs.children].forEach(b => b.classList.toggle('active', b.dataset.t === arrangeTab));
+    fadersWrap.hidden = arrangeTab !== 'fx';
+    waveEdit.hidden   = arrangeTab !== 'wave';
+    renderWave();
+    fitPadText();
+  }
+
   function fmtFader(key, v){
     if(key === 'vol') return Math.round(v * 100) + '%';
     return (v > 0 ? '+' : '') + v.toFixed(1);
@@ -1709,6 +1978,7 @@
       ? 'パッドを押してください'
       : `PAD ${String(arrangeIndex+1).padStart(2,'0')}  ${pads[arrangeIndex].name || '(音なし)'}`;
     renderFaderValues();
+    renderWave();
   }
   function setArrangeTarget(idx){
     arrangeIndex = idx;
@@ -1734,6 +2004,7 @@
     padFx[arrangeIndex] = makeFx();
     applyFx(arrangeIndex);
     renderArrangeBar();
+    renderWave();
     saveSettings();
   });
 
