@@ -441,14 +441,6 @@
     <div id="bgRow"></div>
   </div>
   <div class="row">
-    <div class="label">取込順</div>
-    <div class="segmented" id="orderSeg">
-      <button data-o="name">名前順</button>
-      <button data-o="date">日付順</button>
-      <button data-o="device">そのまま</button>
-    </div>
-  </div>
-  <div class="row">
     <div class="label">SOUND</div>
     <div id="storageInfo">—</div>
   </div>
@@ -525,8 +517,6 @@
   let viewSize = 10;
   // 全体設定: poly=複数パッド同時再生 / mono=常に1音だけ(他を押すとカットイン)
   let voiceMode = 'mono';
-  // 複数ファイルを取り込むときの並び(name=ファイル名順 / device=端末が返した順)
-  let importOrder = 'name';
   let assignMode = false;
   let panelOpen = false;
   // 割当先として選択中のパッド。パッドをタップ → 📂 でファイルを選ぶ。
@@ -1054,15 +1044,11 @@
     if(!files.length || start === null) return;
     clearSelection();
 
-    // iOS はファイル選択でタップした順番(丸枠の数字)を Web 側に渡してくれない。
-    // 取得できるのは名前と更新日時だけなので、そのどちらかで並べる。
-    // 'device' は端末が返した順のまま(タップ順にはならない)。
-    if(importOrder === 'name'){
-      const col = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
-      files.sort((a, b) => col.compare(a.name, b.name));
-    } else if(importOrder === 'date'){
-      files.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
-    }
+    // iOS はファイル選択でタップした順番(丸枠の数字)を Web 側に渡してくれず、
+    // 端末が返す順もフォルダの並び次第で当てにならない。
+    // 予測できる並びになるよう、常にファイル名順にする(数字は数値として比較)。
+    const col = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
+    files.sort((a, b) => col.compare(a.name, b.name));
 
     // どのパッドに入るかを先に決める。足りなければ知らせて選び直せるようにする。
     const plan = planSlots(start, files.length);
@@ -1543,18 +1529,6 @@
     saveSettings();
   });
 
-  const orderSeg = document.getElementById('orderSeg');
-  function setImportOrder(v){
-    importOrder = (v === 'device' || v === 'date') ? v : 'name';
-    [...orderSeg.children].forEach(b => b.classList.toggle('active', b.dataset.o === importOrder));
-  }
-  orderSeg.addEventListener('click', (e) => {
-    const btn = e.target.closest('button');
-    if(!btn) return;
-    setImportOrder(btn.dataset.o);
-    saveSettings();
-  });
-
   const voiceSeg = document.getElementById('voiceSeg');
   function setVoiceMode(v){
     voiceMode = (v === 'poly') ? 'poly' : 'mono';
@@ -1747,7 +1721,7 @@
   function saveSettings(){
     try{
       localStorage.setItem('padfeed_settings', JSON.stringify({
-        v: 2, viewSize, voiceMode, importOrder, panelOpen, page,
+        v: 2, viewSize, voiceMode, panelOpen, page,
         colors: padColors, modes: padModes, vels: padVels, fx: padFx, pageBg
       }));
     }catch(e){}
@@ -1758,7 +1732,6 @@
       if(!raw) return;
       const s = JSON.parse(raw);
       if(s.voiceMode) voiceMode = s.voiceMode;
-      if(s.importOrder) importOrder = s.importOrder;
       if(typeof s.panelOpen === 'boolean') panelOpen = s.panelOpen;
       if(VIEW_SIZES.includes(s.viewSize)) viewSize = s.viewSize;
 
@@ -1802,7 +1775,6 @@
     b.classList.toggle('active', parseInt(b.dataset.n,10) === viewSize);
   });
   setVoiceMode(voiceMode);
-  setImportOrder(importOrder);
   setPanelOpen(panelOpen);
   setAssignMode(false);
   setArrangeMode(false);
