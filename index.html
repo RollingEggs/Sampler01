@@ -283,6 +283,7 @@
   }
   #confirm .crow{ display:flex; gap:8px; }
   #confirm .crow .btn{ flex:1; padding:12px 10px; font-size:12px; }
+  #confirm .crow .btn[hidden]{ display:none; }
   .btn.danger{ color:#ffd9d9; background:#3a1b1b; border-color:#6b2f2f; }
 
   /* file input hidden */
@@ -497,7 +498,7 @@
     <div class="ctext" id="confirmText"></div>
     <div class="crow">
       <button class="btn" id="confirmNo">キャンセル</button>
-      <button class="btn danger" id="confirmYes">削除する</button>
+      <button class="btn" id="confirmYes">削除する</button>
     </div>
   </div>
 </div>
@@ -1043,25 +1044,44 @@
     if(!files.length || start === null) return;
     clearSelection();
 
-    // 1つ目は選んだパッドへ。2つ目以降は選んだ順に「空いている次のパッド」へ入れる。
-    if(files.length > 1) showLoading(0, files.length);
-    let slot = start;
-    for(let n = 0; n < files.length; n++){
-      if(n > 0){
-        slot = nextVacantPad(slot + 1);
-        if(slot === null) break;          // 空きパッドが無くなったら終わり
+    // どのパッドに入るかを先に決める。足りなければ知らせて選び直せるようにする。
+    const plan = planSlots(start, files.length);
+    if(plan.length < files.length){
+      // 1件目は選んだパッド(埋まっていれば上書き)、2件目以降は空きパッドへ
+      const ok = await askConfirm(
+        `入れられるパッドが ${plan.length} 個しかありません。` +
+        `選んだ ${files.length} 件のうち ${plan.length} 件だけ割り当てます(残りは入りません)。`,
+        { yes:`${plan.length}件を入れる`, no:'選び直す', safe:true });
+      if(!ok){                       // 選び直し: もう一度ファイル選択を開く
+        assignStartIndex = start;
+        fileInput.value = '';
+        fileInput.click();
+        return;
       }
-      if(!await assignFileToPad(slot, files[n])) flashError(slot);
-      if(files.length > 1) showLoading(n + 1, files.length);
     }
-    if(files.length > 1) hideLoading();
+
+    const total = plan.length;
+    if(total > 1) showLoading(0, total);
+    for(let n = 0; n < total; n++){
+      if(!await assignFileToPad(plan[n], files[n])) flashError(plan[n]);
+      if(total > 1) showLoading(n + 1, total);
+    }
+    if(total > 1) hideLoading();
   });
 
-  // from 番から後ろへ空きパッドを探す。無ければ先頭に戻って探す。
-  function nextVacantPad(from){
-    for(let i = from; i < PAD_TOTAL; i++) if(!pads[i].buffer) return i;
-    for(let i = 0; i < from && i < PAD_TOTAL; i++) if(!pads[i].buffer) return i;
-    return null;
+  // 1つ目は選んだパッド。2つ目以降は空いている次のパッド(端まで行ったら先頭へ回る)。
+  function planSlots(start, count){
+    const out = [start];
+    const used = new Set([start]);
+    let cur = start;
+    for(let n = 1; n < count; n++){
+      let slot = null;
+      for(let i = cur + 1; i < PAD_TOTAL && slot === null; i++) if(!pads[i].buffer && !used.has(i)) slot = i;
+      if(slot === null) for(let i = 0; i < PAD_TOTAL && slot === null; i++) if(!pads[i].buffer && !used.has(i)) slot = i;
+      if(slot === null) break;
+      used.add(slot); out.push(slot); cur = slot;
+    }
+    return out;
   }
 
   // ---------------- 音源の保存(IndexedDB) ----------------
@@ -1234,8 +1254,14 @@
   const confirmNo = document.getElementById('confirmNo');
   let confirmResolve = null;
 
-  function askConfirm(message){
+  // opts: {yes, no, single(はい だけ表示), safe(赤くしない)}
+  function askConfirm(message, opts){
+    const o = opts || {};
     confirmText.textContent = message;
+    confirmYes.textContent = o.yes || '削除する';
+    confirmNo.textContent  = o.no  || 'キャンセル';
+    confirmNo.hidden = !!o.single;
+    confirmYes.classList.toggle('danger', !o.safe);
     confirmEl.hidden = false;
     return new Promise((resolve) => { confirmResolve = resolve; });
   }
@@ -1358,7 +1384,7 @@
     const idx = selectedIndex;
     const label = pads[idx].name ? `「${pads[idx].name}」` : 'の音';
     if(!pads[idx].buffer) return;                     // 空パッドは何もしない
-    if(!await askConfirm(`P${page+1} の PAD ${String(idx+1).padStart(2,'0')} ${label}を削除します。よろしいですか？`)) return;
+    if(!await askConfirm(`P${page+1} の PAD ${String(idx+1).padStart(2,'0')} ${label}を削除します。よろしいですか？`, { yes:'削除する', no:'キャンセル' })) return;
     if(selectedIndex === null) return;
     stopPadVoices(selectedIndex);
     pads[selectedIndex] = { name:null, buffer:null };
@@ -1520,7 +1546,7 @@
     let n = 0;
     for(let i=from;i<to;i++) if(pads[i].buffer) n++;
     if(!n) return;                                    // 消すものが無ければ何もしない
-    if(!await askConfirm(`ページ ${page+1}(PAD ${from+1}〜${to})の音 ${n}件 をすべて消去します。よろしいですか？`)) return;
+    if(!await askConfirm(`ページ ${page+1}(PAD ${from+1}〜${to})の音 ${n}件 をすべて消去します。よろしいですか？`, { yes:'消去する', no:'キャンセル' })) return;
     stopAllVoices();
     for(let i=from;i<to;i++){
       pads[i] = { name:null, buffer:null };
