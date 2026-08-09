@@ -1043,13 +1043,26 @@
     if(!files.length || start === null) return;
     clearSelection();
 
+    // 1つ目は選んだパッドへ。2つ目以降は選んだ順に「空いている次のパッド」へ入れる。
+    if(files.length > 1) showLoading(0, files.length);
     let slot = start;
-    for(const f of files){
-      if(slot >= pads.length) break;
-      if(await assignFileToPad(slot, f)) slot++;
-      else flashError(slot);
+    for(let n = 0; n < files.length; n++){
+      if(n > 0){
+        slot = nextVacantPad(slot + 1);
+        if(slot === null) break;          // 空きパッドが無くなったら終わり
+      }
+      if(!await assignFileToPad(slot, files[n])) flashError(slot);
+      if(files.length > 1) showLoading(n + 1, files.length);
     }
+    if(files.length > 1) hideLoading();
   });
+
+  // from 番から後ろへ空きパッドを探す。無ければ先頭に戻って探す。
+  function nextVacantPad(from){
+    for(let i = from; i < PAD_TOTAL; i++) if(!pads[i].buffer) return i;
+    for(let i = 0; i < from && i < PAD_TOTAL; i++) if(!pads[i].buffer) return i;
+    return null;
+  }
 
   // ---------------- 音源の保存(IndexedDB) ----------------
   // localStorage は容量も型も足りないので、音源だけ IndexedDB に置く。
