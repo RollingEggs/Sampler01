@@ -250,11 +250,18 @@
   }
   #loading[hidden]{ display:none; }
   #loading .lbox{
-    background:rgba(20,16,12,0.92); border:1px solid var(--amber-dim); border-radius:12px;
-    padding:14px 22px; box-shadow:0 10px 30px rgba(0,0,0,0.55);
-    font-family:var(--mono); font-size:13px; font-weight:700; letter-spacing:.06em;
+    background:rgba(20,16,12,0.94); border:1px solid var(--amber-dim); border-radius:14px;
+    padding:16px 24px; box-shadow:0 10px 30px rgba(0,0,0,0.55);
+    text-align:center; max-width:82vw;
+  }
+  #loading .ltitle{
+    font-family:var(--mono); font-size:15px; font-weight:700; letter-spacing:.08em;
     color:var(--amber);
   }
+  #loading .lsub{
+    font-size:11.5px; line-height:1.6; color:var(--ink-dim); margin-top:6px; white-space:pre-line;
+  }
+  #loading .lsub:empty{ display:none; }
 
   /* ---------- 確認ダイアログ ---------- */
   #confirm{
@@ -478,7 +485,12 @@
 <!-- accept は付けない。iOS Safari では accept="audio/*" を指定すると
      ファイルAppの「ダウンロード」内の mp3/wav が選択不可(グレーアウト)になるため。
      代わりに読み込み時にJS側で判定する。 -->
-<div id="loading" hidden><div class="lbox" id="loadingText">読み込み中…</div></div>
+<div id="loading" hidden>
+  <div class="lbox">
+    <div class="ltitle" id="loadingTitle">起動中</div>
+    <div class="lsub" id="loadingSub"></div>
+  </div>
+</div>
 
 <div id="confirm" hidden>
   <div class="cbox">
@@ -661,6 +673,7 @@
       master = ctx.createGain();
       master.gain.value = parseFloat(document.getElementById('vol').value);
       master.connect(ctx.destination);
+      ctx.onstatechange = updateAudioStatus;   // 起動できたら表示を消す
     }
     if(ctx.state === 'suspended'){ ctx.resume(); }
     updateAudioStatus();
@@ -669,6 +682,7 @@
     const el = document.getElementById('audioDot');
     el.classList.toggle('live', !!(ctx && ctx.state === 'running'));
     el.title = (ctx && ctx.state === 'running') ? 'AUDIO READY' : 'TAP TO START AUDIO';
+    updateStatusOverlay();
   }
 
   // ---------------- タップの強さ(ベロシティ) ----------------
@@ -1109,13 +1123,31 @@
     });
   }
 
+  // 音が出ない理由(オーディオ未起動 / 音源の読み込み中)を画面中央に出しておく
   const loadingEl = document.getElementById('loading');
-  const loadingText = document.getElementById('loadingText');
+  const loadingTitle = document.getElementById('loadingTitle');
+  const loadingSub = document.getElementById('loadingSub');
+  let loadBusy = false, loadDone = 0, loadTotal = 0;
+
   function showLoading(done, total){
-    loadingEl.hidden = false;
-    loadingText.textContent = total ? `読み込み中… ${done} / ${total}` : '読み込み中…';
+    loadBusy = true; loadDone = done; loadTotal = total;
+    updateStatusOverlay();
   }
-  function hideLoading(){ loadingEl.hidden = true; }
+  function hideLoading(){ loadBusy = false; updateStatusOverlay(); }
+
+  function updateStatusOverlay(){
+    const audioReady = !!(ctx && ctx.state === 'running');
+    if(audioReady && !loadBusy){ loadingEl.hidden = true; return; }
+    loadingEl.hidden = false;
+    const progress = loadTotal ? `音源を読み込み中  ${loadDone} / ${loadTotal}` : '音源を読み込み中';
+    if(!audioReady){
+      loadingTitle.textContent = '起動中';
+      loadingSub.textContent = (loadBusy ? progress + '\n' : '') + '画面をタップすると音が出せます';
+    } else {
+      loadingTitle.textContent = '読み込み中';
+      loadingSub.textContent = loadTotal ? `${loadDone} / ${loadTotal}` : '';
+    }
+  }
 
   let soundsLoaded = false;
   // 保存してある音源を読み戻す。表示中のページから先にデコードする。
@@ -1124,7 +1156,7 @@
     soundsLoaded = true;
     showLoading(0, 0);                 // 件数が分かる前から出しておく
     const items = await idbLoadAll();
-    if(!items.length){ hideLoading(); return; }
+    if(!items.length){ hideLoading(); return; }   // 未起動ならこの後も「起動中」が残る
     ensureCtx();
     const inView = (it) => it.idx >= base() && it.idx < base() + viewSize;
     items.sort((a, b) => (inView(b) ? 1 : 0) - (inView(a) ? 1 : 0));
@@ -1708,6 +1740,7 @@
   renderPageBar();
   applyBackground();
   // 前回の音源を読み戻す(表示中のパッドから順にデコードする)
+  updateStatusOverlay();      // オーディオ未起動なので「起動中」から始まる
   loadStoredSounds();
   updateStorageInfo();
   // 保存を消されにくくする(対応ブラウザのみ)
