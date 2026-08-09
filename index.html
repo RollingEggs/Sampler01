@@ -444,7 +444,8 @@
     <div class="label">取込順</div>
     <div class="segmented" id="orderSeg">
       <button data-o="name">名前順</button>
-      <button data-o="device">選んだ順</button>
+      <button data-o="date">日付順</button>
+      <button data-o="device">そのまま</button>
     </div>
   </div>
   <div class="row">
@@ -1053,11 +1054,14 @@
     if(!files.length || start === null) return;
     clearSelection();
 
-    // iOS はタップした順番を Web 側に渡してくれないため、既定はファイル名順で並べる
-    // (数字は数値として比較するので 2 が 10 より前に来る)
+    // iOS はファイル選択でタップした順番(丸枠の数字)を Web 側に渡してくれない。
+    // 取得できるのは名前と更新日時だけなので、そのどちらかで並べる。
+    // 'device' は端末が返した順のまま(タップ順にはならない)。
     if(importOrder === 'name'){
       const col = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
       files.sort((a, b) => col.compare(a.name, b.name));
+    } else if(importOrder === 'date'){
+      files.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
     }
 
     // どのパッドに入るかを先に決める。足りなければ知らせて選び直せるようにする。
@@ -1541,7 +1545,7 @@
 
   const orderSeg = document.getElementById('orderSeg');
   function setImportOrder(v){
-    importOrder = (v === 'device') ? 'device' : 'name';
+    importOrder = (v === 'device' || v === 'date') ? v : 'name';
     [...orderSeg.children].forEach(b => b.classList.toggle('active', b.dataset.o === importOrder));
   }
   orderSeg.addEventListener('click', (e) => {
