@@ -441,6 +441,10 @@
     <div id="bgRow"></div>
   </div>
   <div class="row">
+    <div class="label">SET</div>
+    <div class="segmented" id="setSeg"></div>
+  </div>
+  <div class="row">
     <div class="label">SOUND</div>
     <div id="storageInfo">—</div>
   </div>
@@ -512,6 +516,13 @@
   // ---------------- State ----------------
   // パッドは全部で40個(番号1〜40)。表示サイズ(4/10/20/40)で何個ずつ見せるかが決まり、
   // 表示しきれない分がページになる。例: 表示4ならP1は1〜4、P2は5〜8。
+  // セット(曲ごとの独立した保存領域)。A は従来の保存先をそのまま使う。
+  const SET_IDS = ['A','B','C','D','E','F'];
+  const CUR_SET_KEY = 'padfeed_current_set';
+  let setId = 'A';
+  const settingsKey = () => setId === 'A' ? 'padfeed_settings' : 'padfeed_settings_' + setId;
+  const dbName      = () => setId === 'A' ? 'padfeed'          : 'padfeed_' + setId;
+
   const PAD_TOTAL = 40;
   const VIEW_SIZES = [4, 10, 20, 40];
   let viewSize = 10;
@@ -1093,7 +1104,7 @@
   // ---------------- 音源の保存(IndexedDB) ----------------
   // localStorage は容量も型も足りないので、音源だけ IndexedDB に置く。
   // キーは "p{ページ}:{パッド}"。次に開いたときに自動で読み戻す。
-  const DB_NAME = 'padfeed', STORE = 'sounds';
+  const STORE = 'sounds';
   let dbPromise = null;
   let storeFailed = false;         // 容量不足などで保存できなかったか
 
@@ -1101,7 +1112,7 @@
     if(dbPromise) return dbPromise;
     dbPromise = new Promise((resolve) => {
       try{
-        const req = indexedDB.open(DB_NAME, 1);
+        const req = indexedDB.open(dbName(), 1);
         req.onupgradeneeded = () => {
           const d = req.result;
           if(!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE);
@@ -1511,7 +1522,7 @@
     // 表示40なら1ページなので、ページバーごと隠す
     pagebarEl.hidden = (n <= 1);
     pageLabelEl.innerHTML = `PAGE <span>${page+1}</span> / ${n}  <em>PAD ${base()+1}-${base()+viewSize}</em>`;
-    pageChipEl.textContent = `P${page+1}`;
+    pageChipEl.textContent = `${setId}-P${page+1}`;
     [...pagedotsEl.children].forEach((b, p) => {
       b.hidden = (p >= n);
       b.classList.toggle('on', p === page);
@@ -1528,6 +1539,51 @@
     setViewSize(parseInt(btn.dataset.n, 10));
     saveSettings();
   });
+
+  // ---------------- セット切替(曲ごとに独立した保存領域) ----------------
+  const setSeg = document.getElementById('setSeg');
+  SET_IDS.forEach(id => {
+    const b = document.createElement('button');
+    b.dataset.s = id; b.textContent = id;
+    b.addEventListener('click', () => switchSet(id));
+    setSeg.appendChild(b);
+  });
+  function renderSetBar(){
+    [...setSeg.children].forEach(b => b.classList.toggle('active', b.dataset.s === setId));
+  }
+
+  async function switchSet(id){
+    if(id === setId || !SET_IDS.includes(id)) return;
+    stopAllVoices();
+    saveSettings();                       // 今のセットを確定させる
+    const d = await db();
+    if(d){ try{ d.close(); }catch(e){} }  // 保存先を切り替えるので閉じる
+    dbPromise = null;
+
+    setId = id;
+    try{ localStorage.setItem(CUR_SET_KEY, setId); }catch(e){}
+
+    // 状態を初期値に戻してから、そのセットの設定を読み込む
+    pads = []; padColors = []; padModes = []; padVels = []; padFx = []; pageBg = [];
+    viewSize = 10; page = 0; voiceMode = 'mono';
+    selectedIndex = null; arrangeIndex = null;
+    loadSettings();
+    ensurePads();
+    usePage(page);
+    syncViewButtons();
+    setVoiceMode(voiceMode);
+    padChains.forEach((c, i) => { if(c) applyFx(i); });   // EQ/音量をこのセットの値に
+    renderGrid(); renderPageBar(); applyBackground(); renderArrangeBar(); renderSetBar();
+    soundsLoaded = false;
+    loadStoredSounds();                   // このセットの音源を読み戻す
+    saveSettings();
+  }
+
+  function syncViewButtons(){
+    [...document.getElementById('padCountSeg').children].forEach(b => {
+      b.classList.toggle('active', parseInt(b.dataset.n, 10) === viewSize);
+    });
+  }
 
   const voiceSeg = document.getElementById('voiceSeg');
   function setVoiceMode(v){
@@ -1720,7 +1776,7 @@
   // ---------------- Settings persistence (layout only, not audio) ----------------
   function saveSettings(){
     try{
-      localStorage.setItem('padfeed_settings', JSON.stringify({
+      localStorage.setItem(settingsKey(), JSON.stringify({
         v: 2, viewSize, voiceMode, panelOpen, page,
         colors: padColors, modes: padModes, vels: padVels, fx: padFx, pageBg
       }));
@@ -1728,7 +1784,7 @@
   }
   function loadSettings(){
     try{
-      const raw = localStorage.getItem('padfeed_settings');
+      const raw = localStorage.getItem(settingsKey());
       if(!raw) return;
       const s = JSON.parse(raw);
       if(s.voiceMode) voiceMode = s.voiceMode;
@@ -1769,11 +1825,13 @@
   }
 
   // ---------------- Init ----------------
+  try{
+    const saved = localStorage.getItem(CUR_SET_KEY);
+    if(saved && SET_IDS.includes(saved)) setId = saved;
+  }catch(e){}
   loadSettings();
-  // sync UI to loaded settings
-  [...document.getElementById('padCountSeg').children].forEach(b => {
-    b.classList.toggle('active', parseInt(b.dataset.n,10) === viewSize);
-  });
+  syncViewButtons();
+  renderSetBar();
   setVoiceMode(voiceMode);
   setPanelOpen(panelOpen);
   setAssignMode(false);
